@@ -1,0 +1,26 @@
+{
+  "version": 8,
+  "name": "OffNav Basic",
+  "sources": {
+    "offline": {
+      "type": "vector",
+      "url": "{MBTILES_PATH}"
+    }
+  },
+  "layers": [
+    { "id": "background", "type": "background",
+      "paint": { "background-color": "#f4f1ea" } },
+    { "id": "water", "type": "fill", "source": "offline", "source-layer": "water",
+      "paint": { "fill-color": "#a0c8f0" } },
+    { "id": "landuse", "type": "fill", "source": "offline", "source-layer": "landuse",
+      "paint": { "fill-color": "#e6e4da" } },
+    { "id": "buildings", "type": "fill", "source": "offline", "source-layer": "building",
+      "paint": { "fill-color": "#d9d0c9", "fill-opacity": 0.7 } },
+    { "id": "roads-casing", "type": "line", "source": "offline", "source-layer": "transportation",
+      "paint": { "line-color": "#c9c4bb",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1.5, 18, 14] } },
+    { "id": "roads", "type": "line", "source": "offline", "source-layer": "transportation",
+      "paint": { "line-color": "#ffffff",
+        "line-width": ["interpolate", ["linear"], ["zoom"], 5, 1, 18, 10] } }
+  ]
+}
