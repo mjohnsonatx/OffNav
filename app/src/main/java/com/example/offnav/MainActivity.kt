@@ -22,10 +22,10 @@ class MainActivity : ComponentActivity() {
                 factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                        MapViewModel(container.tileAssetManager) as T
+                        MapViewModel(container.tileAssetManager, container.routingEngine) as T
                 }
             )
-            MapScreen(vm)
+            MapScreen(vm, container.locationController)
         }
     }
 }

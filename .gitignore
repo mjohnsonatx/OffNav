@@ -13,3 +13,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Local map tooling, source extracts, and generated tile databases
+/tools/tilemaker/tilemaker.exe
+*.osm.pbf
+*.mbtiles
+*.pmtiles
+/data/tilemaker-work/

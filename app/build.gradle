@@ -37,7 +37,13 @@ android {
     }
 
     androidResources {
-        noCompress 'mbtiles'
+        noCompress 'mbtiles', 'pbf'
+    }
+
+    packagingOptions {
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
     }
 }
 
@@ -53,6 +59,8 @@ dependencies {
 
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.5'
     implementation 'org.maplibre.gl:android-sdk:11.5.0'
+    implementation 'com.graphhopper:graphhopper-core:9.1'
+    implementation 'org.slf4j:slf4j-android:1.7.36' // GH logs via slf4j
 
     testImplementation libs.junit
     androidTestImplementation platform(libs.androidx.compose.bom)

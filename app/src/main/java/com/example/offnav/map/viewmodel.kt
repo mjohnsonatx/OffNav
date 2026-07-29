@@ -2,10 +2,14 @@ package com.example.offnav.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.offnav.routing.GraphHopperEngine
+import com.example.offnav.routing.RouteResult
+import com.example.offnav.routing.RoutingState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.maplibre.android.geometry.LatLng
 
 sealed interface MapUiState {
     data object Loading : MapUiState
@@ -13,10 +17,19 @@ sealed interface MapUiState {
     data class Error(val message: String) : MapUiState
 }
 
-class MapViewModel(private val tileAssetManager: TileAssetManager) : ViewModel() {
+class MapViewModel(
+    private val tileAssetManager: TileAssetManager,
+    private val routingEngine: GraphHopperEngine
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow<MapUiState>(MapUiState.Loading)
     val uiState = _uiState.asStateFlow()
+
+    private val _route = MutableStateFlow<RouteResult?>(null)
+    val route = _route.asStateFlow()
+
+    private val _routingStatus = MutableStateFlow("Preparing routing…")
+    val routingStatus = _routingStatus.asStateFlow()
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -26,5 +39,25 @@ class MapViewModel(private val tileAssetManager: TileAssetManager) : ViewModel()
                 MapUiState.Error(e.message ?: "Failed to load map data")
             }
         }
+        viewModelScope.launch {
+            routingEngine.initialize()
+            _routingStatus.value = when (val s = routingEngine.state) {
+                is RoutingState.Ready -> "Routing ready"
+                is RoutingState.Failed -> "Routing failed: ${s.message}"
+                else -> "Routing unavailable"
+            }
+        }
     }
+
+    fun requestRoute(from: LatLng, to: LatLng) {
+        viewModelScope.launch {
+            routingEngine.route(from, to)
+                .onSuccess { _route.value = it }
+                .onFailure { _routingStatus.value = "Route error: ${it.message}" }
+        }
+    }
+
+    fun clearRoute() { _route.value = null }
+
+    override fun onCleared() = routingEngine.close()
 }
