@@ -37,6 +37,7 @@ class LocationController {
         }
     }
 
+
     fun lastLocation(map: MapLibreMap) =
         map.locationComponent.takeIf { it.isLocationComponentActivated }?.lastKnownLocation
 }
