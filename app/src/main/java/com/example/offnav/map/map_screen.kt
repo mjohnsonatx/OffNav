@@ -6,10 +6,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -56,19 +59,29 @@ fun MapScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val route by viewModel.route.collectAsState()
-    val routingStatus by viewModel.routingStatus.collectAsState()
     val navState by viewModel.navState.collectAsState()
     val context = LocalContext.current
 
     val routingState by viewModel.routingState.collectAsState()
     val transientMessage by viewModel.transientMessage.collectAsState()
-    val banner: String? = transientMessage ?: when (val r = routingState) {
-        RoutingState.ImportingGraph -> "Building routing graph (first launch, may take a few minutes)…"
-        RoutingState.LoadingGraph   -> "Loading routing graph…"
-        RoutingState.NotReady       -> "Routing not started"
-        RoutingState.Ready          -> null   // hide banner when all good
+    val routingBanner: String? = when (val r = routingState) {
+        is RoutingState.CopyingPbf -> r.fraction?.let { fraction ->
+            "Copying routing data ${(fraction * 100).toInt()}% " +
+                "(${r.copiedBytes.toMegabytes()} / ${r.totalBytes.toMegabytes()} MB)"
+        } ?: "Copying routing data..."
+        is RoutingState.ImportingGraph ->
+            "${r.stage} (${r.elapsedSeconds.toElapsedTime()})"
+        is RoutingState.LoadingGraph ->
+            "Loading routing graph (${r.elapsedSeconds.toElapsedTime()})"
+        RoutingState.NotReady -> "Routing not started"
+        RoutingState.Ready -> null
         is RoutingState.Failed      -> "Routing failed: ${r.message}"
     }
+    val banner = routingBanner ?: transientMessage
+    val showRoutingProgress = routingState is RoutingState.CopyingPbf ||
+        routingState is RoutingState.ImportingGraph ||
+        routingState is RoutingState.LoadingGraph
+    val routingProgress = (routingState as? RoutingState.CopyingPbf)?.fraction
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -113,7 +126,29 @@ fun MapScreen(
             Surface(
                 modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
                 tonalElevation = 4.dp
-            ) { Text(banner, Modifier.padding(8.dp)) }
+            ) {
+                Row(
+                    modifier = Modifier.padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showRoutingProgress) {
+                        if (routingProgress != null) {
+                            CircularProgressIndicator(
+                                progress = { routingProgress },
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        }
+                        Spacer(Modifier.width(10.dp))
+                    }
+                    Text(banner)
+                }
+            }
         }
     }
 
@@ -251,3 +286,11 @@ private fun MapLibreMapView(
 }
 
 private fun Double.format1() = "%.1f".format(this)
+
+private fun Long.toMegabytes(): Long = this / 1_000_000L
+
+private fun Long.toElapsedTime(): String {
+    val minutes = this / 60L
+    val seconds = this % 60L
+    return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
+}

@@ -6,7 +6,6 @@ import com.example.offnav.navigation.NavState
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
-import com.example.offnav.routing.RoutingState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,8 +35,6 @@ class MapViewModel(
     private val _route = MutableStateFlow<RouteResult?>(null)
     val route = _route.asStateFlow()
 
-    private val _routingStatus = MutableStateFlow("Preparing routing…")
-    val routingStatus = _routingStatus.asStateFlow()
     val navState = navigationEngine.navState
 
     init {
@@ -51,11 +48,6 @@ class MapViewModel(
 
         viewModelScope.launch {
             routingEngine.initialize()
-            _routingStatus.value = when (val s = routingEngine.state) {
-                is RoutingState.Ready -> "Routing ready"
-                is RoutingState.Failed -> "Routing failed: ${s.message}"
-                else -> "Routing unavailable"
-            }
         }
         viewModelScope.launch {
             navigationEngine.navState.collect { nav ->
