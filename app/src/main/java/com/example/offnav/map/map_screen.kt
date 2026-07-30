@@ -151,7 +151,6 @@ fun MapScreen(
             }
         }
     }
-
 }
 
 @Composable
