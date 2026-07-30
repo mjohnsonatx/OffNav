@@ -1,35 +1,32 @@
 package com.example.offnav.map
 
 import android.Manifest
-import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -38,30 +35,27 @@ import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
-import com.example.offnav.routing.RouteResult
-import com.example.offnav.routing.RoutingState
+import com.example.offnav.routing.TurnInstruction
 import kotlinx.coroutines.flow.StateFlow
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.LineLayer
-import org.maplibre.android.style.layers.PropertyFactory.lineCap
-import org.maplibre.android.style.layers.PropertyFactory.lineColor
-import org.maplibre.android.style.layers.PropertyFactory.lineJoin
-import org.maplibre.android.style.layers.PropertyFactory.lineWidth
+import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.sources.GeoJsonSource
-import org.maplibre.geojson.Feature
-import org.maplibre.geojson.FeatureCollection
-import org.maplibre.geojson.LineString
-import org.maplibre.geojson.Point
 
 private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
 private const val INITIAL_LOCATION_ZOOM = 15.0
+private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 
+// ════════════════════════════════════════════════════════════════
+// Root
+// ════════════════════════════════════════════════════════════════
 
 @Composable
 fun MapScreen(
@@ -72,7 +66,7 @@ fun MapScreen(
     var hasPermission by remember { mutableStateOf(locationProvider.hasPermission()) }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { hasPermission = it.values.any { granted -> granted } }
+    ) { hasPermission = it.values.any { g -> g } }
 
     LaunchedEffect(Unit) {
         if (!hasPermission) launcher.launch(
@@ -83,9 +77,13 @@ fun MapScreen(
     Box(Modifier.fillMaxSize()) {
         MapHost(viewModel, locationController, locationProvider, hasPermission)
         BannerHost(viewModel, Modifier.align(Alignment.TopCenter).padding(8.dp))
-        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter).padding(16.dp))
+        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter))
     }
 }
+
+// ════════════════════════════════════════════════════════════════
+// Map
+// ════════════════════════════════════════════════════════════════
 
 @Composable
 private fun MapHost(
@@ -104,6 +102,7 @@ private fun MapHost(
             locationController = locationController,
             locationProvider = locationProvider,
             activeRoute = viewModel.activeRoute,
+            viewModel = viewModel,
             onLongPress = viewModel::requestRoute,
         )
     }
@@ -116,6 +115,7 @@ private fun MapLibreCanvas(
     locationController: LocationController,
     locationProvider: LocationProvider,
     activeRoute: StateFlow<ActiveRoute?>,
+    viewModel: MapViewModel,
     onLongPress: (LatLng, LatLng) -> Unit,
 ) {
     val context = LocalContext.current
@@ -123,20 +123,21 @@ private fun MapLibreCanvas(
         MapView(
             context,
             MapLibreMapOptions.createFromAttributes(context).apply {
-                textureMode(false)                       // GLSurfaceView: lowest-latency path
-                localIdeographFontFamily("sans-serif")   // no CJK glyph bundle needed
+                textureMode(false)
+                localIdeographFontFamily("sans-serif")
             }
-        ).also { it.setMaximumFps(60) }                   // don't burn GPU at 120Hz
+        ).also { it.setMaximumFps(60) }
     }
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleRef by remember { mutableStateOf<Style?>(null) }
-    var hasInitialCameraPosition by remember { mutableStateOf(false) }
+    var hasInitialCamera by remember { mutableStateOf(false) }
     val longPress by rememberUpdatedState(onLongPress)
 
+    // Lifecycle
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
+        val obs = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_START -> mapView.onStart()
                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
@@ -145,23 +146,20 @@ private fun MapLibreCanvas(
                 else -> Unit
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            mapView.onDestroy()
-        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs); mapView.onDestroy() }
     }
 
+    // Map init
     LaunchedEffect(Unit) {
         mapView.getMapAsync { map ->
             mapRef = map
             map.setStyle(Style.Builder().fromJson(style.json)) { ready ->
                 ready.addSource(GeoJsonSource(ROUTE_SOURCE))
-                ready.addLayerBelow(                       // keep labels above the route line
+                ready.addLayer(
                     LineLayer(ROUTE_LAYER, ROUTE_SOURCE).withProperties(
                         lineColor("#3b82f6"), lineWidth(6f), lineCap("round"), lineJoin("round")
-                    ),
-                    "road-label"
+                    )
                 )
                 styleRef = ready
             }
@@ -172,86 +170,86 @@ private fun MapLibreCanvas(
                 }
                 true
             }
-            locationProvider.lastFix.value?.let { location ->
+            locationProvider.lastFix.value?.let {
                 map.cameraPosition = CameraPosition.Builder()
-                    .target(LatLng(location.latitude, location.longitude))
-                    .zoom(INITIAL_LOCATION_ZOOM)
-                    .build()
-                hasInitialCameraPosition = true
+                    .target(LatLng(it.latitude, it.longitude)).zoom(INITIAL_LOCATION_ZOOM).build()
+                hasInitialCamera = true
             }
         }
     }
 
-    // Location puck: single GPS subscription, fed from our provider.
+    // Location puck
     LaunchedEffect(hasPermission, styleRef) {
         val map = mapRef ?: return@LaunchedEffect
         val s = styleRef ?: return@LaunchedEffect
         if (!hasPermission) return@LaunchedEffect
         locationController.enable(context, map, s, followUser = true)
-        locationProvider.locations.collect { location ->
-            if (!hasInitialCameraPosition) {
+        locationProvider.locations.collect { loc ->
+            if (!hasInitialCamera) {
                 map.cameraPosition = CameraPosition.Builder()
-                    .target(LatLng(location.latitude, location.longitude))
-                    .zoom(INITIAL_LOCATION_ZOOM)
-                    .build()
-                hasInitialCameraPosition = true
+                    .target(LatLng(loc.latitude, loc.longitude)).zoom(INITIAL_LOCATION_ZOOM).build()
+                hasInitialCamera = true
             }
-            locationController.push(map, location)
+            locationController.push(map, loc)
         }
     }
 
-    // Route overlay: flow collected here, so route changes cause ZERO recomposition.
+    // Route overlay
     LaunchedEffect(styleRef) {
         val s = styleRef ?: return@LaunchedEffect
-        val source = s.getSourceAs<GeoJsonSource>(ROUTE_SOURCE) ?: return@LaunchedEffect
-        activeRoute.collect { route ->
-            source.setGeoJson(route?.overlayGeoJson ?: EMPTY_FEATURE_COLLECTION)
+        val src = s.getSourceAs<GeoJsonSource>(ROUTE_SOURCE) ?: return@LaunchedEffect
+        activeRoute.collect { route -> src.setGeoJson(route?.overlayGeoJson ?: EMPTY_FC) }
+    }
+
+    // Camera commands from ViewModel (fly-to instruction, return to tracking)
+    LaunchedEffect(Unit) {
+        viewModel.cameraCommands.collect { cmd ->
+            val map = mapRef ?: return@collect
+            when (cmd) {
+                is CameraCommand.FlyTo -> {
+                    // Temporarily break tracking so the camera flies to the instruction point
+                    map.locationComponent.cameraMode =
+                        org.maplibre.android.location.modes.CameraMode.NONE
+                    map.animateCamera(
+                        CameraUpdateFactory.newCameraPosition(
+                            CameraPosition.Builder()
+                                .target(cmd.target)
+                                .zoom(cmd.zoom)
+                                .tilt(cmd.tilt)
+                                .build()
+                        ),
+                        1_200
+                    )
+                }
+                CameraCommand.ReturnToTracking -> {
+                    map.locationComponent.cameraMode =
+                        org.maplibre.android.location.modes.CameraMode.TRACKING_GPS
+                }
+            }
         }
     }
 
     AndroidView(modifier = Modifier.fillMaxSize(), factory = { mapView })
 }
 
-@Composable
-private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
-    val nav by viewModel.navState.collectAsStateWithLifecycle()
-    val hasRoute by viewModel.hasRoute.collectAsStateWithLifecycle()
-
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        when (val n = nav) {
-            is NavState.Navigating -> {
-                TurnBanner(n.banner)
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = viewModel::stopNavigation) { Text("End navigation") }
-            }
-            NavState.Rerouting -> Surface(tonalElevation = 4.dp) { Text("Rerouting…", Modifier.padding(12.dp)) }
-            NavState.Arrived -> Surface(tonalElevation = 4.dp) { Text("You have arrived 🎉", Modifier.padding(12.dp)) }
-            NavState.Idle -> if (hasRoute) {
-                Button(onClick = viewModel::startNavigation) { Text("Start navigation") }
-            }
-        }
-    }
-}
+// ════════════════════════════════════════════════════════════════
+// Status banner (routing progress / errors)
+// ════════════════════════════════════════════════════════════════
 
 @Composable
 private fun BannerHost(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     val banner by viewModel.banner.collectAsStateWithLifecycle()
     val b = banner ?: return
-
     Surface(modifier = modifier, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (b.showSpinner) {
                 if (b.progress != null) {
-                    CircularProgressIndicator(
-                        progress = { b.progress },
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                    )
+                    CircularProgressIndicator(progress = { b.progress }, Modifier.size(20.dp), strokeWidth = 2.dp)
                 } else {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 }
                 Spacer(Modifier.width(10.dp))
             }
@@ -260,90 +258,296 @@ private fun BannerHost(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     }
 }
 
-//@Composable
-//private fun TurnBanner(banner: NavBanner) {
-//    Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-//        Row(
-//            modifier = Modifier.padding(12.dp),
-//            verticalAlignment = Alignment.CenterVertically,
-//        ) {
-//            Icon(
-//                painter = painterResource(Maneuvers.icon(banner.maneuverSign)),
-//                contentDescription = banner.instructionText,
-//                modifier = Modifier.size(48.dp),
-//                tint = MaterialTheme.colorScheme.primary,
-//            )
-//            Spacer(Modifier.width(12.dp))
-//            Column {
-//                Text(
-//                    banner.instructionText,
-//                    style = MaterialTheme.typography.titleMedium,
-//                    maxLines = 2,
-//                    overflow = TextOverflow.Ellipsis,
-//                )
-//                Spacer(Modifier.height(2.dp))
-//                Text(
-//                    formatDistance(banner.distanceToManeuverMeters),
-//                    style = MaterialTheme.typography.headlineSmall,
-//                    color = MaterialTheme.colorScheme.primary,
-//                )
-//                Text(
-//                    "${formatDistance(banner.remainingMeters)} · ${formatEta(banner.remainingSeconds)}",
-//                    style = MaterialTheme.typography.bodySmall,
-//                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-//                )
-//            }
-//        }
-//    }
-//}
+// ════════════════════════════════════════════════════════════════
+// Navigation panel — persistent banner + directions list
+// ════════════════════════════════════════════════════════════════
 
-// temporary until you add the drawable set
 @Composable
-private fun TurnBanner(banner: NavBanner) {
-    Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                maneuverEmoji(banner.maneuverSign),
-                style = MaterialTheme.typography.headlineLarge,
-                modifier = Modifier.width(48.dp),
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text(banner.instructionText, style = MaterialTheme.typography.titleMedium, maxLines = 2)
-                Spacer(Modifier.height(2.dp))
-                Text(formatDistance(banner.distanceToManeuverMeters),
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.primary)
-                Text("${formatDistance(banner.remainingMeters)} · ${formatEta(banner.remainingSeconds)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+    val nav by viewModel.navState.collectAsStateWithLifecycle()
+    val hasRoute by viewModel.hasRoute.collectAsStateWithLifecycle()
+    var showDirections by remember { mutableStateOf(false) }
+
+    // Extract the banner: available from both Navigating and Rerouting
+    val activeBanner: NavBanner? = when (val n = nav) {
+        is NavState.Navigating -> n.banner
+        is NavState.Rerouting -> n.lastBanner
+        else -> null
+    }
+    val isRerouting = nav is NavState.Rerouting
+
+    Column(modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        when (nav) {
+            is NavState.Navigating, is NavState.Rerouting -> {
+                // The turn banner persists across both states
+                activeBanner?.let { banner ->
+                    TurnBannerCard(banner, isRerouting)
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Directions list toggle
+                    FilledTonalButton(onClick = { showDirections = !showDirections }) {
+                        Icon(
+                            if (showDirections) Icons.Default.Close
+                            else Icons.AutoMirrored.Filled.List,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (showDirections) "Hide steps" else "Steps")
+                    }
+                    // Return to tracking after browsing an instruction
+                    FilledTonalButton(onClick = viewModel::returnToTracking) {
+                        Icon(Icons.Default.MyLocation, contentDescription = null, Modifier.size(18.dp))
+                    }
+                    // End navigation
+                    Button(onClick = {
+                        showDirections = false
+                        viewModel.stopNavigation()
+                    }) { Text("End") }
+                }
+            }
+            NavState.Arrived -> {
+                showDirections = false
+                Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
+                    Text("You have arrived 🎉", Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.titleMedium)
+                }
+            }
+            NavState.Idle -> {
+                showDirections = false
+                if (hasRoute) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = viewModel::startNavigation) { Text("Start navigation") }
+                        FilledTonalButton(onClick = { showDirections = true }) {
+                            Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Preview steps")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Directions list overlay
+    if (showDirections) {
+        DirectionsList(
+            viewModel = viewModel,
+            currentIndex = activeBanner?.currentInstructionIndex ?: -1,
+            onDismiss = { showDirections = false },
+        )
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Turn banner card (shows rerouting overlay when applicable)
+// ════════════════════════════════════════════════════════════════
+
+@Composable
+private fun TurnBannerCard(banner: NavBanner, isRerouting: Boolean) {
+    Surface(
+        tonalElevation = 4.dp,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    maneuverEmoji(banner.maneuverSign),
+                    style = MaterialTheme.typography.headlineLarge,
+                    modifier = Modifier.width(48.dp),
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        banner.instructionText,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        formatDistance(banner.distanceToManeuverMeters),
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        "${formatDistance(banner.remainingMeters)} · ${formatEta(banner.remainingSeconds)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // Semi-transparent rerouting overlay on top of the existing banner
+            if (isRerouting) {
+                Surface(
+                    modifier = Modifier.matchParentSize(),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.75f),
+                ) {
+                    Row(
+                        Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Rerouting…", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
             }
         }
     }
 }
 
+// ════════════════════════════════════════════════════════════════
+// Directions list (scrollable, tappable steps)
+// ════════════════════════════════════════════════════════════════
+
+@Composable
+private fun DirectionsList(
+    viewModel: MapViewModel,
+    currentIndex: Int,
+    onDismiss: () -> Unit,
+) {
+    val instructions by viewModel.instructions.collectAsStateWithLifecycle()
+    val listState = rememberLazyListState()
+
+    // Auto-scroll to the active instruction when it changes
+    LaunchedEffect(currentIndex) {
+        if (currentIndex >= 0 && currentIndex < instructions.size) {
+            listState.animateScrollToItem(currentIndex)
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .fillMaxHeight(0.45f)          // takes up to 45% of the screen
+            .padding(horizontal = 8.dp),
+        tonalElevation = 6.dp,
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+    ) {
+        Column {
+            // Header
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Directions · ${instructions.size} steps",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+            HorizontalDivider()
+
+            // Step list
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(instructions, key = { i, _ -> i }) { index, instruction ->
+                    DirectionRow(
+                        index = index,
+                        instruction = instruction,
+                        isCurrent = index == currentIndex,
+                        onClick = { viewModel.flyToInstruction(instruction) },
+                    )
+                    if (index < instructions.lastIndex) {
+                        HorizontalDivider(Modifier.padding(start = 56.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DirectionRow(
+    index: Int,
+    instruction: TurnInstruction,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+) {
+    val bg = if (isCurrent) MaterialTheme.colorScheme.primaryContainer
+    else MaterialTheme.colorScheme.surface
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(bg)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Step number + maneuver emoji
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(40.dp),
+        ) {
+            Text(
+                maneuverEmoji(instruction.sign),
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+                "${index + 1}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Spacer(Modifier.width(12.dp))
+
+        Column(Modifier.weight(1f)) {
+            Text(
+                instruction.text,
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                formatDistance(instruction.distanceMeters.toInt()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════════════════════
+
 private fun maneuverEmoji(sign: Int): String = when (sign) {
-    -3       -> "⤺"    // sharp left
-    -2       -> "←"    // left
-    -1       -> "↰"    // slight left
-    0        -> "↑"    // straight
-    1        -> "↱"    // slight right
-    2        -> "→"    // right
-    3        -> "⤻"    // sharp right
-    -7       -> "⇐"   // keep left
-    7        -> "⇒"   // keep right
-    6        -> "↻"    // roundabout
-    -8, -98  -> "⤹"   // u-turn
-    4        -> "🏁"   // finish
-    5        -> "📍"   // via
+    -3       -> "⤺"
+    -2       -> "←"
+    -1       -> "↰"
+    0        -> "↑"
+    1        -> "↱"
+    2        -> "→"
+    3        -> "⤻"
+    -7       -> "⇐"
+    7        -> "⇒"
+    6        -> "↻"
+    -8, -98  -> "⤹"
+    4        -> "🏁"
+    5        -> "📍"
     else     -> "↑"
 }
 
 private fun formatDistance(meters: Int): String = when {
     meters >= 10_000 -> "%.0f km".format(meters / 1000.0)
     meters >= 1_000  -> "%.1f km".format(meters / 1000.0)
-    meters >= 100    -> "${(meters / 10) * 10} m"      // round to 10 m
+    meters >= 100    -> "${(meters / 10) * 10} m"
     else             -> "$meters m"
 }
 
@@ -352,5 +556,3 @@ private fun formatEta(seconds: Int): String {
     val m = (seconds % 3600) / 60
     return if (h > 0) "${h}h ${m}min" else "${m} min"
 }
-
-private const val EMPTY_FEATURE_COLLECTION = """{"type":"FeatureCollection","features":[]}"""
