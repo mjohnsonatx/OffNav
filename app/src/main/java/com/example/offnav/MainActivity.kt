@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
                         MapViewModel(container.tileAssetManager, container.routingEngine, container.navigationEngine) as T
                 }
             )
-            MapScreen(vm, container.locationController)
+            MapScreen(vm, container.locationController, container.locationProvider)
         }
     }
 }

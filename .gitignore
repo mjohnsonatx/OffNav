@@ -19,4 +19,6 @@ local.properties
 *.osm.pbf
 *.mbtiles
 *.pmtiles
+*.ghz
 /data/tilemaker-work/
+/tools/graphhopper-builder/build/
