@@ -47,6 +47,7 @@ import org.maplibre.geojson.Point
 private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
 
+
 @Composable
 fun MapScreen(
     viewModel: MapViewModel,
