@@ -1,0 +1,23 @@
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'com.graphhopper:graphhopper-core:9.1'
+    runtimeOnly 'org.slf4j:slf4j-simple:1.7.36'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'com.example.offnav.tools.GraphBuilder'
+    applicationDefaultJvmArgs = ['-Xms1g', '-Xmx12g', '-Dfile.encoding=UTF-8']
+}
