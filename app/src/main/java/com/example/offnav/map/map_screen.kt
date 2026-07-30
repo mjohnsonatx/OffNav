@@ -60,6 +60,7 @@ import org.maplibre.geojson.Point
 
 private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
+private const val INITIAL_LOCATION_ZOOM = 15.0
 
 
 @Composable
@@ -130,6 +131,7 @@ private fun MapLibreCanvas(
 
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleRef by remember { mutableStateOf<Style?>(null) }
+    var hasInitialCameraPosition by remember { mutableStateOf(false) }
     val longPress by rememberUpdatedState(onLongPress)
 
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -170,9 +172,12 @@ private fun MapLibreCanvas(
                 }
                 true
             }
-            locationProvider.lastFix.value?.let {
+            locationProvider.lastFix.value?.let { location ->
                 map.cameraPosition = CameraPosition.Builder()
-                    .target(LatLng(it.latitude, it.longitude)).zoom(15.0).build()
+                    .target(LatLng(location.latitude, location.longitude))
+                    .zoom(INITIAL_LOCATION_ZOOM)
+                    .build()
+                hasInitialCameraPosition = true
             }
         }
     }
@@ -183,7 +188,16 @@ private fun MapLibreCanvas(
         val s = styleRef ?: return@LaunchedEffect
         if (!hasPermission) return@LaunchedEffect
         locationController.enable(context, map, s, followUser = true)
-        locationProvider.locations.collect { locationController.push(map, it) }
+        locationProvider.locations.collect { location ->
+            if (!hasInitialCameraPosition) {
+                map.cameraPosition = CameraPosition.Builder()
+                    .target(LatLng(location.latitude, location.longitude))
+                    .zoom(INITIAL_LOCATION_ZOOM)
+                    .build()
+                hasInitialCameraPosition = true
+            }
+            locationController.push(map, location)
+        }
     }
 
     // Route overlay: flow collected here, so route changes cause ZERO recomposition.
