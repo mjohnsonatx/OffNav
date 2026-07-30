@@ -65,7 +65,7 @@ class GraphHopperEngine(private val context: Context) {
                     graphHopperLocation = graphDir.absolutePath
                     osmFile = ensurePbfOnDisk().absolutePath
                     setProfiles(
-                        Profile(PROFILE).setVehicle("car").setWeighting("fastest")
+                        Profile(PROFILE).setName("car").setWeighting("fastest")
                     )
                     // Contraction hierarchies = very fast queries, fixed profile
                     chPreparationHandler.setCHProfiles(CHProfile(PROFILE))
@@ -102,7 +102,11 @@ class GraphHopperEngine(private val context: Context) {
                     distanceMeters = best.distance,
                     timeMillis = best.time,
                     instructions = best.instructions.map {
-                        TurnInstruction(it.turnDescription(best.instructions.tr), it.distance, it.sign)
+                        TurnInstruction(
+                            text = it.getTurnDescription(gh.translationMap.getWithFallBack(java.util.Locale.getDefault())),
+                            distanceMeters = it.distance,
+                            sign = it.sign
+                        )
                     }
                 )
             )

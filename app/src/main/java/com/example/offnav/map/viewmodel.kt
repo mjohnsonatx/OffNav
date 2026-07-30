@@ -2,6 +2,8 @@ package com.example.offnav.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.offnav.navigation.NavState
+import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
@@ -19,7 +21,8 @@ sealed interface MapUiState {
 
 class MapViewModel(
     private val tileAssetManager: TileAssetManager,
-    private val routingEngine: GraphHopperEngine
+    private val routingEngine: GraphHopperEngine,
+    private val navigationEngine: NavigationEngine
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<MapUiState>(MapUiState.Loading)
@@ -30,6 +33,7 @@ class MapViewModel(
 
     private val _routingStatus = MutableStateFlow("Preparing routing…")
     val routingStatus = _routingStatus.asStateFlow()
+    val navState = navigationEngine.navState
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -47,14 +51,34 @@ class MapViewModel(
                 else -> "Routing unavailable"
             }
         }
+        viewModelScope.launch {
+            navigationEngine.navState.collect { nav ->
+                when (nav) {
+                    is NavState.Navigating -> _route.value = nav.route
+                    is NavState.Arrived -> _route.value = null
+                    else -> Unit
+                }
+            }
+        }
     }
 
+    private var lastDestination: LatLng? = null
     fun requestRoute(from: LatLng, to: LatLng) {
+        lastDestination = to
         viewModelScope.launch {
             routingEngine.route(from, to)
                 .onSuccess { _route.value = it }
                 .onFailure { _routingStatus.value = "Route error: ${it.message}" }
         }
+    }
+    fun startNavigation() {
+        val route = _route.value ?: return
+        val dest = lastDestination ?: return
+        navigationEngine.start(route, dest)
+    }
+    fun stopNavigation() {
+        navigationEngine.stop()
+        clearRoute()
     }
 
     fun clearRoute() { _route.value = null }
