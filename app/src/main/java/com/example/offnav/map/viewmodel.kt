@@ -19,6 +19,7 @@ sealed interface MapUiState {
     data class Error(val message: String) : MapUiState
 }
 
+
 class MapViewModel(
     private val tileAssetManager: TileAssetManager,
     private val routingEngine: GraphHopperEngine,
