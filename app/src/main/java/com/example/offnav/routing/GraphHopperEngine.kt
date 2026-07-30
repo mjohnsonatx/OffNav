@@ -5,7 +5,6 @@ import android.os.SystemClock
 import android.util.Log
 import com.graphhopper.GHRequest
 import com.graphhopper.GraphHopper
-import com.graphhopper.GraphHopperConfig
 import com.graphhopper.config.CHProfile
 import com.graphhopper.config.Profile
 import com.graphhopper.json.Statement
@@ -19,7 +18,6 @@ import com.graphhopper.util.CustomModel
 import com.graphhopper.util.Parameters
 import com.graphhopper.util.PointList
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -32,11 +30,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
 import java.io.File
-import java.io.FilterInputStream
-import java.io.InputStream
 import java.util.Locale
-import java.util.concurrent.Executors
-import java.util.zip.ZipInputStream
 
 data class RouteResult(
     val points: List<LatLng>,
@@ -53,16 +47,18 @@ data class TurnInstruction(
 
 sealed interface RoutingState {
     data object NotReady : RoutingState
-
-    data class InstallingGraph(
-        val processedBytes: Long,
+    data class CopyingPbf(
+        val copiedBytes: Long,
         val totalBytes: Long
     ) : RoutingState {
         val fraction: Float?
             get() = totalBytes.takeIf { it > 0 }
-                ?.let { (processedBytes.toDouble() / it).coerceIn(0.0, 1.0).toFloat() }
+                ?.let { (copiedBytes.toDouble() / it).coerceIn(0.0, 1.0).toFloat() }
     }
-
+    data class ImportingGraph(
+        val stage: String,
+        val elapsedSeconds: Long
+    ) : RoutingState
     data class LoadingGraph(val elapsedSeconds: Long) : RoutingState
     data object Ready : RoutingState
     data class Failed(val message: String) : RoutingState
@@ -72,14 +68,12 @@ class GraphHopperEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "GraphHopperEngine"
-        private const val GRAPH_ASSET = "routing/region.ghz"
+        private const val PBF_ASSET = "routing/region.osm.pbf"
+        private const val PBF_FILE = "region.osm.pbf"
         private const val GRAPH_DIR = "graphhopper"
-        private const val GRAPH_PARTIAL_DIR = "graphhopper.partial"
-        private const val GRAPH_VERSION_ENTRY = "offnav.graph.version"
-        private const val LEGACY_PBF_FILE = "region.osm.pbf"
-        private const val LEGACY_VERSION_FILE = "graph.profile.version"
+        private const val VERSION_FILE = "graph.profile.version"
         private const val PROFILE = "car"
-        private const val GRAPH_CONFIG_VERSION = 4
+        private const val GRAPH_CONFIG_VERSION = 3
         private const val COPY_BUFFER_SIZE = 1024 * 1024
         private const val COPY_PROGRESS_STEP = 8L * 1024L * 1024L
         private const val ENCODED_VALUES =
@@ -91,15 +85,6 @@ class GraphHopperEngine(private val context: Context) {
 
     private val _state = MutableStateFlow<RoutingState>(RoutingState.NotReady)
     val state = _state.asStateFlow()
-
-    /** Low-priority single thread: extraction + MMAP load never outrank the render thread. */
-    private val initDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "gh-init").apply { priority = Thread.MIN_PRIORITY }
-    }.asCoroutineDispatcher()
-    /** Serialised routing: one request at a time, leaves cores for the UI. */
-    private val routeDispatcher = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "gh-route").apply { priority = Thread.NORM_PRIORITY - 1 }
-    }.asCoroutineDispatcher()
 
     val isReady: Boolean get() = hopper != null
 
@@ -121,37 +106,59 @@ class GraphHopperEngine(private val context: Context) {
         // setTurnCostsConfig(TurnCostsConfig.car())
     }
 
-    suspend fun initialize() = withContext(initDispatcher) {
+    suspend fun initialize() = withContext(Dispatchers.IO) {
         initMutex.withLock {
             if (hopper != null) return@withLock
             var graphHopper: GraphHopper? = null
             try {
                 val profile = carProfile()
                 val graphDir = File(context.filesDir, GRAPH_DIR)
+                val versionFile = File(context.filesDir, VERSION_FILE)
                 val currentVersion =
                     "$GRAPH_CONFIG_VERSION:${profile.version}:$ENCODED_VALUES"
-                val started = SystemClock.elapsedRealtime()
 
-                deleteLegacyRoutingFiles()
-                ensureGraphInstalled(graphDir, currentVersion)
-                publishLoadStage("Loading memory-mapped routing graph", started)
-
-                val config = GraphHopperConfig().apply {
-                    putObject("graph.location", graphDir.absolutePath)
-                    putObject("graph.dataaccess.default_type", "MMAP")
-                    putObject("graph.encoded_values", ENCODED_VALUES)
-                    putObject("prepare.min_network_size", 200)
-                    putObject("import.osm.ignored_highways", "")
-                    setProfiles(listOf(profile))
-                    setCHProfiles(listOf(CHProfile(PROFILE)))
+                // If the profile definition changed since the graph was built,
+                // the stored graph is incompatible — discard it.
+                val storedVersion = versionFile.takeIf { it.exists() }?.readText()?.trim()
+                if (graphDir.exists() && storedVersion != currentVersion) {
+                    Log.w(TAG, "Profile changed ($storedVersion -> $currentVersion); rebuilding graph")
+                    graphDir.deleteRecursively()
                 }
-                val gh = AndroidGraphHopper { stage -> publishLoadStage(stage, started) }.apply {
-                    init(config)
-                    setAllowWrites(false)
+
+                val needsImport = !graphDir.exists() || graphDir.listFiles().isNullOrEmpty()
+                val started = SystemClock.elapsedRealtime()
+                if (needsImport) {
+                    publishImportStage("Preparing routing graph", started)
+                } else {
+                    _state.value = RoutingState.LoadingGraph(elapsedSeconds = 0)
+                    Log.i(TAG, "Loading saved routing graph")
+                }
+
+                val pbf = ensurePbfOnDisk()
+                if (_state.value is RoutingState.CopyingPbf) {
+                    if (needsImport) {
+                        publishImportStage("Preparing routing graph", started)
+                    } else {
+                        _state.value = RoutingState.LoadingGraph(elapsedSeconds = elapsedSeconds(started))
+                    }
+                }
+                Log.i(TAG, "PBF ${pbf.length() / 1_000_000} MB, needsImport=$needsImport")
+
+                val gh = ProgressGraphHopper { stage ->
+                    publishImportStage(stage, started)
+                }.apply {
+                    graphHopperLocation = graphDir.absolutePath
+                    osmFile = pbf.absolutePath
+                    setEncodedValuesString(ENCODED_VALUES)
+                    setProfiles(profile)
+                    chPreparationHandler.setCHProfiles(CHProfile(PROFILE))
+                    setMinNetworkSize(200)
+                    setStoreOnFlush(true)
                 }
                 graphHopper = gh
-                loadWithTimer(gh, started)
+                importOrLoadWithTimer(gh, started)
                 hopper = gh
+                versionFile.writeText(currentVersion)
                 _state.value = RoutingState.Ready
                 Log.i(TAG, "Graph ready in ${elapsedSeconds(started)}s")
             } catch (t: Throwable) {
@@ -167,7 +174,7 @@ class GraphHopperEngine(private val context: Context) {
 
     /** Supports multi-stop: points are visited in order. */
     suspend fun route(points: List<LatLng>): Result<RouteResult> =
-        withContext(routeDispatcher) {
+        withContext(Dispatchers.Default) {
             val gh = hopper
                 ?: return@withContext Result.failure(IllegalStateException("Engine not ready"))
             if (points.size < 2) {
@@ -205,7 +212,7 @@ class GraphHopperEngine(private val context: Context) {
         _state.value = RoutingState.NotReady
     }
 
-    private suspend fun loadWithTimer(
+    private suspend fun importOrLoadWithTimer(
         graphHopper: GraphHopper,
         started: Long
     ) = coroutineScope {
@@ -215,6 +222,7 @@ class GraphHopperEngine(private val context: Context) {
                 delay(1_000)
                 val elapsed = elapsedSeconds(started)
                 _state.value = when (val current = _state.value) {
+                    is RoutingState.ImportingGraph -> current.copy(elapsedSeconds = elapsed)
                     is RoutingState.LoadingGraph -> current.copy(elapsedSeconds = elapsed)
                     else -> current
                 }
@@ -225,14 +233,14 @@ class GraphHopperEngine(private val context: Context) {
             }
         }
         try {
-            check(graphHopper.load()) { "Prebuilt routing graph could not be loaded" }
+            graphHopper.importOrLoad()
         } finally {
             timer.cancelAndJoin()
         }
     }
 
-    private fun publishLoadStage(stage: String, started: Long) {
-        _state.value = RoutingState.LoadingGraph(elapsedSeconds(started))
+    private fun publishImportStage(stage: String, started: Long) {
+        _state.value = RoutingState.ImportingGraph(stage, elapsedSeconds(started))
         Log.i(TAG, stage)
     }
 
@@ -240,105 +248,67 @@ class GraphHopperEngine(private val context: Context) {
         (SystemClock.elapsedRealtime() - started).coerceAtLeast(0L) / 1_000L
 
     private fun progressDescription(state: RoutingState): String = when (state) {
-        is RoutingState.InstallingGraph -> "Installing prebuilt routing graph"
-        is RoutingState.LoadingGraph -> "Loading memory-mapped routing graph"
+        is RoutingState.CopyingPbf -> "Copying routing data"
+        is RoutingState.ImportingGraph -> state.stage
+        is RoutingState.LoadingGraph -> "Loading saved routing graph"
         RoutingState.NotReady -> "Routing not started"
         RoutingState.Ready -> "Routing ready"
         is RoutingState.Failed -> "Routing failed"
     }
 
-    private fun deleteLegacyRoutingFiles() {
-        for (name in listOf(LEGACY_PBF_FILE, "$LEGACY_PBF_FILE.partial", LEGACY_VERSION_FILE)) {
-            val file = File(context.filesDir, name)
-            if (file.exists() && file.delete()) {
-                Log.i(TAG, "Removed legacy routing file: $name")
-            }
-        }
-    }
-
-    private fun ensureGraphInstalled(graphDir: File, currentVersion: String) {
-        val installedVersion = File(graphDir, GRAPH_VERSION_ENTRY)
-            .takeIf { it.isFile }
-            ?.readText()
-            ?.trim()
-        if (installedVersion == currentVersion) return
-
-        if (graphDir.exists()) {
-            Log.w(TAG, "Replacing incompatible or incomplete routing graph ($installedVersion)")
-            check(graphDir.deleteRecursively()) { "Could not remove incompatible routing graph" }
-        }
-
-        val partialDir = File(context.filesDir, GRAPH_PARTIAL_DIR)
-        if (partialDir.exists()) {
-            check(partialDir.deleteRecursively()) { "Could not clear partial routing graph" }
-        }
-        check(partialDir.mkdirs()) { "Could not create routing graph staging directory" }
-
+    private fun ensurePbfOnDisk(): File {
+        val dest = File(context.filesDir, PBF_FILE)
         val assetLength = runCatching {
-            context.assets.openFd(GRAPH_ASSET).use { it.length }
+            context.assets.openFd(PBF_ASSET).use { it.length }
         }.getOrDefault(-1L)
-        Log.i(TAG, "Installing prebuilt routing graph ($assetLength bytes)")
+
+        if (dest.exists() && (assetLength <= 0L || dest.length() == assetLength)) {
+            return dest
+        }
+        if (dest.exists()) {
+            Log.w(TAG, "Discarding incomplete PBF copy (${dest.length()} of $assetLength bytes)")
+            check(dest.delete()) { "Could not replace incomplete routing PBF" }
+        }
+
+        val partial = File(context.filesDir, "$PBF_FILE.partial")
+        if (partial.exists()) check(partial.delete()) { "Could not clear partial routing PBF" }
+
+        Log.i(TAG, "Copying routing PBF into app storage ($assetLength bytes)")
+        var copiedBytes = 0L
         var nextProgressUpdate = 0L
         try {
-            val rootPath = partialDir.canonicalPath + File.separator
-            context.assets.open(GRAPH_ASSET).use { assetInput ->
-                val countingInput = CountingInputStream(assetInput)
-                ZipInputStream(countingInput.buffered(COPY_BUFFER_SIZE)).use { zip ->
+            context.assets.open(PBF_ASSET).use { input ->
+                partial.outputStream().buffered(COPY_BUFFER_SIZE).use { output ->
                     val buffer = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
-                        val entry = zip.nextEntry ?: break
-                        val outputFile = File(partialDir, entry.name)
-                        check(outputFile.canonicalPath.startsWith(rootPath)) {
-                            "Unsafe routing graph archive entry: ${entry.name}"
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        output.write(buffer, 0, count)
+                        copiedBytes += count
+                        if (copiedBytes >= nextProgressUpdate) {
+                            _state.value = RoutingState.CopyingPbf(copiedBytes, assetLength)
+                            nextProgressUpdate = copiedBytes + COPY_PROGRESS_STEP
                         }
-                        if (entry.isDirectory) {
-                            check(outputFile.isDirectory || outputFile.mkdirs()) {
-                                "Could not create routing graph directory: ${entry.name}"
-                            }
-                        } else {
-                            val parent = outputFile.parentFile
-                            check(parent == null || parent.isDirectory || parent.mkdirs()) {
-                                "Could not create routing graph parent directory: ${entry.name}"
-                            }
-                            outputFile.outputStream().buffered(COPY_BUFFER_SIZE).use { output ->
-                                while (true) {
-                                    val count = zip.read(buffer)
-                                    if (count < 0) break
-                                    output.write(buffer, 0, count)
-                                    if (countingInput.bytesRead >= nextProgressUpdate) {
-                                        _state.value = RoutingState.InstallingGraph(
-                                            countingInput.bytesRead,
-                                            assetLength
-                                        )
-                                        nextProgressUpdate = countingInput.bytesRead + COPY_PROGRESS_STEP
-                                    }
-                                }
-                            }
-                        }
-                        zip.closeEntry()
                     }
                 }
             }
-            _state.value = RoutingState.InstallingGraph(assetLength, assetLength)
-            val extractedVersion = File(partialDir, GRAPH_VERSION_ENTRY)
-                .takeIf { it.isFile }
-                ?.readText()
-                ?.trim()
-            check(extractedVersion == currentVersion) {
-                "Routing graph version mismatch: expected $currentVersion, found $extractedVersion"
+            _state.value = RoutingState.CopyingPbf(copiedBytes, assetLength)
+            check(assetLength <= 0L || copiedBytes == assetLength) {
+                "Routing PBF copy was incomplete: $copiedBytes of $assetLength bytes"
             }
-            check(partialDir.renameTo(graphDir)) { "Could not finalize routing graph installation" }
+            check(partial.renameTo(dest)) { "Could not finalize routing PBF copy" }
         } catch (t: Throwable) {
-            partialDir.deleteRecursively()
+            partial.delete()
             throw t
         }
-        Log.i(TAG, "Prebuilt routing graph installed")
+        Log.i(TAG, "Routing PBF copy complete (${dest.length()} bytes)")
+        return dest
     }
 
     private fun PointList.toLatLngs(): List<LatLng> =
         (0 until size()).map { LatLng(getLat(it), getLon(it)) }
 
-    private class AndroidGraphHopper(
+    private class ProgressGraphHopper(
         private val onStage: (String) -> Unit
     ) : GraphHopper() {
         /**
@@ -397,19 +367,29 @@ class GraphHopperEngine(private val context: Context) {
             }
         }
 
+        override fun importOSM() {
+            onStage("Reading OpenStreetMap roads")
+            super.importOSM()
+        }
+
+        override fun postImportOSM() {
+            onStage("Finalizing imported roads")
+            super.postImportOSM()
+        }
+
+        override fun cleanUp() {
+            onStage("Removing disconnected road networks")
+            super.cleanUp()
+        }
+
         override fun postProcessing(closeEarly: Boolean) {
-            onStage("Loading routing indexes and shortcuts")
+            onStage("Building routing indexes and shortcuts")
             super.postProcessing(closeEarly)
         }
-    }
 
-    private class CountingInputStream(input: InputStream) : FilterInputStream(input) {
-        var bytesRead: Long = 0L
-            private set
-
-        override fun read(): Int = super.read().also { if (it >= 0) bytesRead++ }
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-            super.read(buffer, offset, length).also { if (it > 0) bytesRead += it }
+        override fun flush() {
+            onStage("Saving routing graph")
+            super.flush()
+        }
     }
 }

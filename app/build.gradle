@@ -37,7 +37,7 @@ android {
     }
 
     androidResources {
-        noCompress 'mbtiles', 'ghz'
+        noCompress 'mbtiles', 'pbf'
     }
 
     packagingOptions {
