@@ -10,6 +10,7 @@ import com.example.offnav.map.MapScreen
 import com.example.offnav.map.MapViewModel
 import org.maplibre.android.MapLibre
 
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
