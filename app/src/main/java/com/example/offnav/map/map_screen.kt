@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -23,18 +24,27 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.offnav.location.LocationController
+import com.example.offnav.location.LocationProvider
+import com.example.offnav.navigation.ActiveRoute
+import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
+import kotlinx.coroutines.flow.StateFlow
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.LineLayer
@@ -55,156 +65,73 @@ private const val ROUTE_LAYER = "route-layer"
 @Composable
 fun MapScreen(
     viewModel: MapViewModel,
-    locationController: LocationController
+    locationController: LocationController,
+    locationProvider: LocationProvider,
 ) {
-    val state by viewModel.uiState.collectAsState()
-    val route by viewModel.route.collectAsState()
-    val navState by viewModel.navState.collectAsState()
-    val context = LocalContext.current
+    var hasPermission by remember { mutableStateOf(locationProvider.hasPermission()) }
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { hasPermission = it.values.any { granted -> granted } }
 
-    val routingState by viewModel.routingState.collectAsState()
-    val transientMessage by viewModel.transientMessage.collectAsState()
-    val routingBanner: String? = when (val r = routingState) {
-        is RoutingState.CopyingPbf -> r.fraction?.let { fraction ->
-            "Copying routing data ${(fraction * 100).toInt()}% " +
-                "(${r.copiedBytes.toMegabytes()} / ${r.totalBytes.toMegabytes()} MB)"
-        } ?: "Copying routing data..."
-        is RoutingState.ImportingGraph ->
-            "${r.stage} (${r.elapsedSeconds.toElapsedTime()})"
-        is RoutingState.LoadingGraph ->
-            "Loading routing graph (${r.elapsedSeconds.toElapsedTime()})"
-        RoutingState.NotReady -> "Routing not started"
-        RoutingState.Ready -> null
-        is RoutingState.Failed      -> "Routing failed: ${r.message}"
-    }
-    val banner = routingBanner ?: transientMessage
-    val showRoutingProgress = routingState is RoutingState.CopyingPbf ||
-        routingState is RoutingState.ImportingGraph ||
-        routingState is RoutingState.LoadingGraph
-    val routingProgress = (routingState as? RoutingState.CopyingPbf)?.fraction
-
-    var hasLocationPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(
-                context, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
+    LaunchedEffect(Unit) {
+        if (!hasPermission) launcher.launch(
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         )
     }
 
-    val permissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        hasLocationPermission = results.values.any { it }
-    }
-
-    LaunchedEffect(Unit) {
-        if (!hasLocationPermission) {
-            permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-            )
-        }
-    }
-
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        when (val s = state) {
-            is MapUiState.Loading -> CircularProgressIndicator()
-            is MapUiState.Error -> Text("Map error: ${s.message}")
-            is MapUiState.Ready -> MapLibreMapView(
-                styleJson = s.styleJson,
-                hasLocationPermission = hasLocationPermission,
-                locationController = locationController,
-                route = route,
-                onRouteRequested = viewModel::requestRoute
-            )
-        }
-
-        // Simple status banner (import progress, route errors, etc.)
-        if (banner != null) {
-            Surface(
-                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
-                tonalElevation = 4.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (showRoutingProgress) {
-                        if (routingProgress != null) {
-                            CircularProgressIndicator(
-                                progress = { routingProgress },
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp
-                            )
-                        }
-                        Spacer(Modifier.width(10.dp))
-                    }
-                    Text(banner)
-                }
-            }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            //.align(Alignment.BottomCenter)
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        when (val nav = navState) {
-            is NavState.Navigating -> {
-                Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-                    Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            nav.currentInstruction?.text ?: "Continue",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text("in ${nav.distanceToNextTurnMeters.toInt()} m")
-                        Text("${(nav.remainingMeters / 1000).format1()} km remaining")
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = viewModel::stopNavigation) { Text("End navigation") }
-            }
-            is NavState.Rerouting -> {
-                Surface(tonalElevation = 4.dp) { Text("Rerouting…", Modifier.padding(12.dp)) }
-            }
-            is NavState.Arrived -> {
-                Surface(tonalElevation = 4.dp) { Text("You have arrived 🎉", Modifier.padding(12.dp)) }
-            }
-            is NavState.Idle -> {
-                if (route != null) {
-                    Button(onClick = viewModel::startNavigation) { Text("Start navigation") }
-                }
-            }
-        }
+    Box(Modifier.fillMaxSize()) {
+        MapHost(viewModel, locationController, locationProvider, hasPermission)
+        BannerHost(viewModel, Modifier.align(Alignment.TopCenter).padding(8.dp))
+        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter).padding(16.dp))
     }
 }
 
 @Composable
-private fun MapLibreMapView(
-    styleJson: String,
-    hasLocationPermission: Boolean,
+private fun MapHost(
+    viewModel: MapViewModel,
     locationController: LocationController,
-    route: RouteResult?,
-    onRouteRequested: (LatLng, LatLng) -> Unit
+    locationProvider: LocationProvider,
+    hasPermission: Boolean,
+) {
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    when (val s = state) {
+        MapUiState.Loading -> Box(Modifier.fillMaxSize(), Alignment.Center) { CircularProgressIndicator() }
+        is MapUiState.Error -> Box(Modifier.fillMaxSize(), Alignment.Center) { Text("Map error: ${s.message}") }
+        is MapUiState.Ready -> MapLibreCanvas(
+            style = s.style,
+            hasPermission = hasPermission,
+            locationController = locationController,
+            locationProvider = locationProvider,
+            activeRoute = viewModel.activeRoute,
+            onLongPress = viewModel::requestRoute,
+        )
+    }
+}
+
+@Composable
+private fun MapLibreCanvas(
+    style: StyleHolder,
+    hasPermission: Boolean,
+    locationController: LocationController,
+    locationProvider: LocationProvider,
+    activeRoute: StateFlow<ActiveRoute?>,
+    onLongPress: (LatLng, LatLng) -> Unit,
 ) {
     val context = LocalContext.current
-    val mapView = remember { MapView(context) }
+    val mapView = remember {
+        MapView(
+            context,
+            MapLibreMapOptions.createFromAttributes(context).apply {
+                textureMode(false)                       // GLSurfaceView: lowest-latency path
+                localIdeographFontFamily("sans-serif")   // no CJK glyph bundle needed
+            }
+        ).also { it.setMaximumFps(60) }                   // don't burn GPU at 120Hz
+    }
 
-    // Compose state holders bridging the async MapLibre callbacks back
-    // into the composition, so LaunchedEffects below re-run when ready.
     var mapRef by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleRef by remember { mutableStateOf<Style?>(null) }
+    val longPress by rememberUpdatedState(onLongPress)
 
-    // ---- 1. Lifecycle wiring ----
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -213,84 +140,203 @@ private fun MapLibreMapView(
                 Lifecycle.Event.ON_RESUME -> mapView.onResume()
                 Lifecycle.Event.ON_PAUSE -> mapView.onPause()
                 Lifecycle.Event.ON_STOP -> mapView.onStop()
-                Lifecycle.Event.ON_DESTROY -> mapView.onDestroy()
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapView.onDestroy()
+        }
     }
 
-    // ---- 2. Map init: runs ONCE (not in `update`, which runs every recomposition) ----
     LaunchedEffect(Unit) {
         mapView.getMapAsync { map ->
             mapRef = map
-            map.setStyle(Style.Builder().fromJson(styleJson)) { style ->
-                // Pre-create the empty route source + layer so later
-                // effects only need to setGeoJson on it.
-                style.addSource(GeoJsonSource(ROUTE_SOURCE))
-                style.addLayer(
+            map.setStyle(Style.Builder().fromJson(style.json)) { ready ->
+                ready.addSource(GeoJsonSource(ROUTE_SOURCE))
+                ready.addLayerBelow(                       // keep labels above the route line
                     LineLayer(ROUTE_LAYER, ROUTE_SOURCE).withProperties(
-                        lineColor("#3b82f6"),
-                        lineWidth(6f),
-                        lineCap("round"),
-                        lineJoin("round")
-                    )
+                        lineColor("#3b82f6"), lineWidth(6f), lineCap("round"), lineJoin("round")
+                    ),
+                    "road-label"
                 )
-                styleRef = style
+                styleRef = ready
             }
-            map.cameraPosition = CameraPosition.Builder()
-                .target(LatLng(52.52, 13.405)) // match your extract
-                .zoom(12.0)
-                .build()
-
-            // Long-press anywhere = route from current position to there
+            map.uiSettings.isRotateGesturesEnabled = true
             map.addOnMapLongClickListener { target ->
-                val loc = locationController.lastLocation(map)
-                if (loc != null) {
-                    onRouteRequested(LatLng(loc.latitude, loc.longitude), target)
+                locationProvider.lastFix.value?.let {
+                    longPress(LatLng(it.latitude, it.longitude), target)
                 }
                 true
             }
+            locationProvider.lastFix.value?.let {
+                map.cameraPosition = CameraPosition.Builder()
+                    .target(LatLng(it.latitude, it.longitude)).zoom(15.0).build()
+            }
         }
     }
 
-    // ---- 3. Location puck: re-runs when permission OR style becomes ready ----
-    LaunchedEffect(hasLocationPermission, styleRef) {
+    // Location puck: single GPS subscription, fed from our provider.
+    LaunchedEffect(hasPermission, styleRef) {
         val map = mapRef ?: return@LaunchedEffect
-        val style = styleRef ?: return@LaunchedEffect
-        if (hasLocationPermission) {
-            locationController.enable(context, map, style, followUser = true)
+        val s = styleRef ?: return@LaunchedEffect
+        if (!hasPermission) return@LaunchedEffect
+        locationController.enable(context, map, s, followUser = true)
+        locationProvider.locations.collect { locationController.push(map, it) }
+    }
+
+    // Route overlay: flow collected here, so route changes cause ZERO recomposition.
+    LaunchedEffect(styleRef) {
+        val s = styleRef ?: return@LaunchedEffect
+        val source = s.getSourceAs<GeoJsonSource>(ROUTE_SOURCE) ?: return@LaunchedEffect
+        activeRoute.collect { route ->
+            source.setGeoJson(route?.overlayGeoJson ?: EMPTY_FEATURE_COLLECTION)
         }
     }
 
-    // ---- 4. Route drawing: re-runs when the route OR style changes ----
-    LaunchedEffect(route, styleRef) {
-        val style = styleRef ?: return@LaunchedEffect
-        val source = style.getSourceAs<GeoJsonSource>(ROUTE_SOURCE) ?: return@LaunchedEffect
-        if (route == null) {
-            source.setGeoJson(FeatureCollection.fromFeatures(emptyList()))
-        } else {
-            val line = LineString.fromLngLats(
-                route.points.map { Point.fromLngLat(it.longitude, it.latitude) }
+    AndroidView(modifier = Modifier.fillMaxSize(), factory = { mapView })
+}
+
+@Composable
+private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+    val nav by viewModel.navState.collectAsStateWithLifecycle()
+    val hasRoute by viewModel.hasRoute.collectAsStateWithLifecycle()
+
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        when (val n = nav) {
+            is NavState.Navigating -> {
+                TurnBanner(n.banner)
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = viewModel::stopNavigation) { Text("End navigation") }
+            }
+            NavState.Rerouting -> Surface(tonalElevation = 4.dp) { Text("Rerouting…", Modifier.padding(12.dp)) }
+            NavState.Arrived -> Surface(tonalElevation = 4.dp) { Text("You have arrived 🎉", Modifier.padding(12.dp)) }
+            NavState.Idle -> if (hasRoute) {
+                Button(onClick = viewModel::startNavigation) { Text("Start navigation") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BannerHost(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+    val banner by viewModel.banner.collectAsStateWithLifecycle()
+    val b = banner ?: return
+
+    Surface(modifier = modifier, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (b.showSpinner) {
+                if (b.progress != null) {
+                    CircularProgressIndicator(
+                        progress = { b.progress },
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(b.text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+//@Composable
+//private fun TurnBanner(banner: NavBanner) {
+//    Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
+//        Row(
+//            modifier = Modifier.padding(12.dp),
+//            verticalAlignment = Alignment.CenterVertically,
+//        ) {
+//            Icon(
+//                painter = painterResource(Maneuvers.icon(banner.maneuverSign)),
+//                contentDescription = banner.instructionText,
+//                modifier = Modifier.size(48.dp),
+//                tint = MaterialTheme.colorScheme.primary,
+//            )
+//            Spacer(Modifier.width(12.dp))
+//            Column {
+//                Text(
+//                    banner.instructionText,
+//                    style = MaterialTheme.typography.titleMedium,
+//                    maxLines = 2,
+//                    overflow = TextOverflow.Ellipsis,
+//                )
+//                Spacer(Modifier.height(2.dp))
+//                Text(
+//                    formatDistance(banner.distanceToManeuverMeters),
+//                    style = MaterialTheme.typography.headlineSmall,
+//                    color = MaterialTheme.colorScheme.primary,
+//                )
+//                Text(
+//                    "${formatDistance(banner.remainingMeters)} · ${formatEta(banner.remainingSeconds)}",
+//                    style = MaterialTheme.typography.bodySmall,
+//                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+//                )
+//            }
+//        }
+//    }
+//}
+
+// temporary until you add the drawable set
+@Composable
+private fun TurnBanner(banner: NavBanner) {
+    Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                maneuverEmoji(banner.maneuverSign),
+                style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.width(48.dp),
+                textAlign = TextAlign.Center,
             )
-            source.setGeoJson(Feature.fromGeometry(line))
+            Spacer(Modifier.width(12.dp))
+            Column {
+                Text(banner.instructionText, style = MaterialTheme.typography.titleMedium, maxLines = 2)
+                Spacer(Modifier.height(2.dp))
+                Text(formatDistance(banner.distanceToManeuverMeters),
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.primary)
+                Text("${formatDistance(banner.remainingMeters)} · ${formatEta(banner.remainingSeconds)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
     }
-
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { mapView }
-        // No `update` block needed — all dynamic behavior is in the effects above.
-    )
 }
 
-private fun Double.format1() = "%.1f".format(this)
-
-private fun Long.toMegabytes(): Long = this / 1_000_000L
-
-private fun Long.toElapsedTime(): String {
-    val minutes = this / 60L
-    val seconds = this % 60L
-    return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
+private fun maneuverEmoji(sign: Int): String = when (sign) {
+    -3       -> "⤺"    // sharp left
+    -2       -> "←"    // left
+    -1       -> "↰"    // slight left
+    0        -> "↑"    // straight
+    1        -> "↱"    // slight right
+    2        -> "→"    // right
+    3        -> "⤻"    // sharp right
+    -7       -> "⇐"   // keep left
+    7        -> "⇒"   // keep right
+    6        -> "↻"    // roundabout
+    -8, -98  -> "⤹"   // u-turn
+    4        -> "🏁"   // finish
+    5        -> "📍"   // via
+    else     -> "↑"
 }
+
+private fun formatDistance(meters: Int): String = when {
+    meters >= 10_000 -> "%.0f km".format(meters / 1000.0)
+    meters >= 1_000  -> "%.1f km".format(meters / 1000.0)
+    meters >= 100    -> "${(meters / 10) * 10} m"      // round to 10 m
+    else             -> "$meters m"
+}
+
+private fun formatEta(seconds: Int): String {
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    return if (h > 0) "${h}h ${m}min" else "${m} min"
+}
+
+private const val EMPTY_FEATURE_COLLECTION = """{"type":"FeatureCollection","features":[]}"""
