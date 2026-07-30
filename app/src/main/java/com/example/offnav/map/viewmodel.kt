@@ -1,13 +1,20 @@
 package com.example.offnav.map
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.routing.*
+import com.example.offnav.search.PlaceSearchRepository
+import com.example.offnav.search.PlaceSearchResult
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
 import kotlinx.coroutines.channels.Channel
 
@@ -31,6 +38,8 @@ class MapViewModel(
     private val tileAssetManager: TileAssetManager,
     private val routingEngine: GraphHopperEngine,
     private val navigationEngine: NavigationEngine,
+    private val locationProvider: LocationProvider,
+    private val placeSearchRepository: PlaceSearchRepository,
 ) : ViewModel() {
 
     // ── Map style ──
@@ -41,6 +50,17 @@ class MapViewModel(
     private val _route = MutableStateFlow<RouteResult?>(null)
     val hasRoute: StateFlow<Boolean> =
         _route.map { it != null }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // Offline Austin destination search.
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    private val _searchResults = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
+    val searchResults: StateFlow<List<PlaceSearchResult>> = _searchResults.asStateFlow()
+    private val _searching = MutableStateFlow(false)
+    val searching: StateFlow<Boolean> = _searching.asStateFlow()
+    private val _searchError = MutableStateFlow<String?>(null)
+    val searchError: StateFlow<String?> = _searchError.asStateFlow()
+    private var searchJob: Job? = null
 
     /** Full instruction list for the directions panel. */
     val instructions: StateFlow<List<TurnInstruction>> =
@@ -92,6 +112,62 @@ class MapViewModel(
     // ── Route requests ──
     private var destination: LatLng? = null
     private var routeJob: Job? = null
+
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+        _searchError.value = null
+        searchJob?.cancel()
+        if (query.trim().length < 2) {
+            _searchResults.value = emptyList()
+            _searching.value = false
+            return
+        }
+
+        val requestedQuery = query
+        _searching.value = true
+        searchJob = viewModelScope.launch {
+            delay(180)
+            try {
+                _searchResults.value = withContext(Dispatchers.IO) {
+                    placeSearchRepository.search(requestedQuery)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                Log.e("MapViewModel", "Offline Austin search failed", failure)
+                _searchResults.value = emptyList()
+                _searchError.value = "Offline Austin search is unavailable"
+            } finally {
+                if (_searchQuery.value == requestedQuery) _searching.value = false
+            }
+        }
+    }
+
+    fun clearSearch() {
+        searchJob?.cancel()
+        _searchQuery.value = ""
+        _searchResults.value = emptyList()
+        _searchError.value = null
+        _searching.value = false
+    }
+
+    fun selectSearchResult(result: PlaceSearchResult) {
+        searchJob?.cancel()
+        _searchQuery.value = result.name
+        _searchResults.value = emptyList()
+        _searchError.value = null
+
+        val target = LatLng(result.latitude, result.longitude)
+        destination = target
+        _cameraCommands.trySend(CameraCommand.FlyTo(target, zoom = 16.5))
+
+        val fix = locationProvider.lastFix.value
+        if (fix == null) {
+            _transient.value = "Waiting for a GPS fix before routing to ${result.name}"
+            return
+        }
+        requestRoute(LatLng(fix.latitude, fix.longitude), target)
+    }
 
     fun requestRoute(from: LatLng, to: LatLng) {
         if (!routingEngine.isReady) {

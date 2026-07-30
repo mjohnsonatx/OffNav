@@ -21,3 +21,11 @@ application {
     mainClass = 'com.example.offnav.tools.GraphBuilder'
     applicationDefaultJvmArgs = ['-Xms1g', '-Xmx12g', '-Dfile.encoding=UTF-8']
 }
+
+tasks.register('extractSearchData', JavaExec) {
+    group = 'application'
+    description = 'Extracts Austin addresses and POIs from an OSM PBF into TSV.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.offnav.tools.AustinSearchExtractor'
+    jvmArgs '-Xms512m', '-Xmx8g', '-Dfile.encoding=UTF-8'
+}

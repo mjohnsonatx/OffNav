@@ -8,6 +8,7 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
+__pycache__/
 /build
 /captures
 .externalNativeBuild
@@ -20,5 +21,6 @@ local.properties
 *.mbtiles
 *.pmtiles
 *.ghz
+app/src/main/assets/search/*.db
 /data/tilemaker-work/
 /tools/graphhopper-builder/build/

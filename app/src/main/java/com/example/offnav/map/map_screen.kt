@@ -17,10 +17,12 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -76,7 +78,15 @@ fun MapScreen(
 
     Box(Modifier.fillMaxSize()) {
         MapHost(viewModel, locationController, locationProvider, hasPermission)
-        BannerHost(viewModel, Modifier.align(Alignment.TopCenter).padding(8.dp))
+        DestinationSearchPanel(
+            viewModel,
+            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),
+        )
+        BannerHost(
+            viewModel,
+            Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                .padding(start = 12.dp, top = 84.dp, end = 12.dp),
+        )
         NavPanel(viewModel, Modifier.align(Alignment.BottomCenter))
     }
 }
@@ -84,6 +94,111 @@ fun MapScreen(
 // ════════════════════════════════════════════════════════════════
 // Map
 // ════════════════════════════════════════════════════════════════
+
+@Composable
+private fun DestinationSearchPanel(
+    viewModel: MapViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val query by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val results by viewModel.searchResults.collectAsStateWithLifecycle()
+    val searching by viewModel.searching.collectAsStateWithLifecycle()
+    val error by viewModel.searchError.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val showResults = expanded && query.trim().length >= 2
+
+    Column(modifier.fillMaxWidth()) {
+        Surface(
+            tonalElevation = 6.dp,
+            shadowElevation = 4.dp,
+            shape = RoundedCornerShape(18.dp),
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    expanded = true
+                    viewModel.updateSearchQuery(it)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Destination") },
+                placeholder = { Text("Address, restaurant, park, or business") },
+                singleLine = true,
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = {
+                            expanded = false
+                            viewModel.clearSearch()
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear destination")
+                        }
+                    }
+                },
+            )
+        }
+
+        AnimatedVisibility(showResults) {
+            Surface(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).heightIn(max = 320.dp),
+                tonalElevation = 8.dp,
+                shadowElevation = 6.dp,
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                when {
+                    searching -> Row(
+                        Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Searching offline Austin data...")
+                    }
+                    error != null -> Text(
+                        error ?: "Offline Austin search failed",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    results.isEmpty() -> Text(
+                        "No Austin matches",
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    else -> LazyColumn {
+                        itemsIndexed(
+                            items = results,
+                            key = { index, result ->
+                                "${result.name}:${result.latitude}:${result.longitude}:$index"
+                            },
+                        ) { _, result ->
+                            Column(
+                                Modifier.fillMaxWidth().clickable {
+                                    expanded = false
+                                    focusManager.clearFocus()
+                                    viewModel.selectSearchResult(result)
+                                }.padding(horizontal = 16.dp, vertical = 12.dp)
+                            ) {
+                                Text(
+                                    result.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    result.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun MapHost(
