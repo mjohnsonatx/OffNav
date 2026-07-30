@@ -28,6 +28,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.example.offnav.location.LocationController
 import com.example.offnav.navigation.NavState
 import com.example.offnav.routing.RouteResult
+import com.example.offnav.routing.RoutingState
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
@@ -58,6 +59,16 @@ fun MapScreen(
     val routingStatus by viewModel.routingStatus.collectAsState()
     val navState by viewModel.navState.collectAsState()
     val context = LocalContext.current
+
+    val routingState by viewModel.routingState.collectAsState()
+    val transientMessage by viewModel.transientMessage.collectAsState()
+    val banner: String? = transientMessage ?: when (val r = routingState) {
+        RoutingState.ImportingGraph -> "Building routing graph (first launch, may take a few minutes)…"
+        RoutingState.LoadingGraph   -> "Loading routing graph…"
+        RoutingState.NotReady       -> "Routing not started"
+        RoutingState.Ready          -> null   // hide banner when all good
+        is RoutingState.Failed      -> "Routing failed: ${r.message}"
+    }
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -96,14 +107,13 @@ fun MapScreen(
                 onRouteRequested = viewModel::requestRoute
             )
         }
+
         // Simple status banner (import progress, route errors, etc.)
-        Surface(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(8.dp),
-            tonalElevation = 4.dp
-        ) {
-            Text(routingStatus, Modifier.padding(8.dp))
+        if (banner != null) {
+            Surface(
+                modifier = Modifier.align(Alignment.TopCenter).padding(8.dp),
+                tonalElevation = 4.dp
+            ) { Text(banner, Modifier.padding(8.dp)) }
         }
     }
 

@@ -26,6 +26,10 @@ class MapViewModel(
     private val navigationEngine: NavigationEngine
 ) : ViewModel() {
 
+    val routingState = routingEngine.state
+    private val _transientMessage = MutableStateFlow<String?>(null)
+    val transientMessage = _transientMessage.asStateFlow()
+
     private val _uiState = MutableStateFlow<MapUiState>(MapUiState.Loading)
     val uiState = _uiState.asStateFlow()
 
@@ -44,6 +48,7 @@ class MapViewModel(
                 MapUiState.Error(e.message ?: "Failed to load map data")
             }
         }
+
         viewModelScope.launch {
             routingEngine.initialize()
             _routingStatus.value = when (val s = routingEngine.state) {
@@ -65,11 +70,15 @@ class MapViewModel(
 
     private var lastDestination: LatLng? = null
     fun requestRoute(from: LatLng, to: LatLng) {
+        if (!routingEngine.isReady) {
+            _transientMessage.value = "Routing engine still preparing — please wait"
+            return
+        }
         lastDestination = to
         viewModelScope.launch {
             routingEngine.route(from, to)
-                .onSuccess { _route.value = it }
-                .onFailure { _routingStatus.value = "Route error: ${it.message}" }
+                .onSuccess { _route.value = it; _transientMessage.value = null }
+                .onFailure { _transientMessage.value = "Route error: ${it.message}" }
         }
     }
     fun startNavigation() {
