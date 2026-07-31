@@ -10,6 +10,7 @@ import com.example.offnav.map.MapScreen
 import com.example.offnav.map.MapViewModel
 import org.maplibre.android.MapLibre
 
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -22,7 +23,14 @@ class MainActivity : ComponentActivity() {
                 factory = object : ViewModelProvider.Factory {
                     @Suppress("UNCHECKED_CAST")
                     override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                        MapViewModel(container.tileAssetManager, container.routingEngine, container.navigationEngine) as T
+                        MapViewModel(
+                            container.tileAssetManager,
+                            container.routingEngine,
+                            container.navigationEngine,
+                            container.locationProvider,
+                            container.historyRepository,
+                            container.placeSearchRepository,
+                        ) as T
                 }
             )
             MapScreen(vm, container.locationController, container.locationProvider)

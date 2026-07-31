@@ -48,7 +48,9 @@ data class RouteResult(
 data class TurnInstruction(
     val text: String,
     val distanceMeters: Double,
-    val sign: Int
+    val sign: Int,
+    val lat: Double,   // maneuver point
+    val lon: Double,
 )
 
 sealed interface RoutingState {
@@ -193,7 +195,13 @@ class GraphHopperEngine(private val context: Context) {
                     distanceMeters = best.distance,
                     timeMillis = best.time,
                     instructions = best.instructions.map {
-                        TurnInstruction(it.getTurnDescription(tr), it.distance, it.sign)
+                        TurnInstruction(
+                            text = it.getTurnDescription(tr),
+                            distanceMeters = it.distance,
+                            sign = it.sign,
+                            lat = it.points.getLat(0),
+                            lon = it.points.getLon(0),
+                        )
                     }
                 )
             )

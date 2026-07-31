@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -40,7 +41,7 @@ android {
         // MapLibre reads offline glyph ranges directly from AssetManager. Keeping
         // PBF files uncompressed avoids the asset-read failures that previously
         // left symbol layers without text.
-        noCompress 'mbtiles', 'ghz', 'pbf'
+        noCompress 'mbtiles', 'ghz', 'db', 'pbf'
     }
 
     packagingOptions {
@@ -64,6 +65,14 @@ dependencies {
     implementation 'org.maplibre.gl:android-sdk:11.5.0'
     implementation 'com.graphhopper:graphhopper-core:9.1'
     implementation 'org.slf4j:slf4j-android:1.7.36' // GH logs via slf4j
+    implementation("androidx.compose.material:material-icons-extended")
+
+    implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
+    ksp("androidx.room:room-compiler:2.8.4")
+
+    implementation("androidx.compose.material3:material3:1.3.1") // ModalBottomSheet
+
 
     testImplementation libs.junit
     androidTestImplementation platform(libs.androidx.compose.bom)
