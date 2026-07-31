@@ -749,13 +749,17 @@ private fun BannerHost(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 // Navigation panel — persistent banner + directions list
 // ════════════════════════════════════════════════════════════════
 
+// Replace the NavPanel composable entirely in MapScreen.kt
+
 @Composable
 private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     val nav by viewModel.navState.collectAsStateWithLifecycle()
     val hasRoute by viewModel.hasRoute.collectAsStateWithLifecycle()
+    val pdfExporting by viewModel.pdfExporting.collectAsStateWithLifecycle()
     var showDirections by remember { mutableStateOf(false) }
+    var showOverflow by remember { mutableStateOf(false) }
 
-    // Extract the banner: available from both Navigating and Rerouting
     val activeBanner: NavBanner? = when (val n = nav) {
         is NavState.Navigating -> n.banner
         is NavState.Rerouting -> n.lastBanner
@@ -766,15 +770,12 @@ private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
     Column(modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         when (nav) {
             is NavState.Navigating, is NavState.Rerouting -> {
-                // The turn banner persists across both states
-                activeBanner?.let { banner ->
-                    TurnBannerCard(banner, isRerouting)
-                }
-
+                activeBanner?.let { banner -> TurnBannerCard(banner, isRerouting) }
                 Spacer(Modifier.height(8.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Directions list toggle
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+
                     FilledTonalButton(onClick = { showDirections = !showDirections }) {
                         Icon(
                             if (showDirections) Icons.Default.Close
@@ -783,32 +784,113 @@ private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text(if (showDirections) "Hide steps" else "Steps")
+                        Text(if (showDirections) "Hide" else "Steps")
                     }
 
-                    // Return to tracking after browsing an instruction
                     FilledTonalButton(onClick = viewModel::returnToTracking) {
-                        Icon(Icons.Default.MyLocation, contentDescription = null, Modifier.size(18.dp))
+                        Icon(Icons.Default.MyLocation, null, Modifier.size(18.dp))
                     }
-                    // End navigation
+
+                    // Overflow menu for share/export
+                    Box {
+                        FilledTonalButton(onClick = { showOverflow = true }) {
+                            Icon(Icons.Default.MoreVert, null, Modifier.size(18.dp))
+                        }
+                        DropdownMenu(
+                            expanded = showOverflow,
+                            onDismissRequest = { showOverflow = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Share route") },
+                                onClick = {
+                                    showOverflow = false
+                                    viewModel.shareRoute(context)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Share, null)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Share my location") },
+                                onClick = {
+                                    showOverflow = false
+                                    viewModel.shareLocation(context)
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.MyLocation, null)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (pdfExporting) "Exporting…" else "Export PDF"
+                                    )
+                                },
+                                onClick = {
+                                    if (!pdfExporting) {
+                                        showOverflow = false
+                                        viewModel.exportDirectionsPdf(context)
+                                    }
+                                },
+                                enabled = !pdfExporting,
+                                leadingIcon = {
+                                    if (pdfExporting) {
+                                        CircularProgressIndicator(
+                                            Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Icon(Icons.Default.PictureAsPdf, null)
+                                    }
+                                },
+                            )
+                        }
+                    }
+
                     Button(onClick = {
                         showDirections = false
-                        viewModel.stopNavigation()
+                        viewModel.stopNavigation(context)
                     }) { Text("End") }
                 }
             }
+
             NavState.Arrived -> {
                 showDirections = false
                 Surface(tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium) {
-                    Text("You have arrived 🎉", Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.titleMedium)
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "You have arrived 🎉",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { viewModel.shareLocation(context) }
+                            ) {
+                                Icon(Icons.Default.MyLocation, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Share Pin")
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.exportDirectionsPdf(context) },
+                                enabled = !pdfExporting,
+                            ) {
+                                Icon(Icons.Default.PictureAsPdf, null, Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("PDF")
+                            }
+                        }
+                    }
                 }
             }
+
             NavState.Idle -> {
                 showDirections = false
                 if (hasRoute) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = viewModel::startNavigation) { Text("Start navigation") }
+                        Button(onClick = {
+                            viewModel.startNavigation(context)
+                        }) { Text("Start navigation") }
                         FilledTonalButton(onClick = { showDirections = true }) {
                             Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
@@ -820,7 +902,6 @@ private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    // Directions list overlay
     if (showDirections) {
         DirectionsList(
             viewModel = viewModel,

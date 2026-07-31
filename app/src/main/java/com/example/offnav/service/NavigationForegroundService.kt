@@ -16,6 +16,7 @@ import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
+import kotlin.time.Duration.Companion.milliseconds
 
 class NavigationForegroundService : Service() {
 
@@ -126,10 +127,14 @@ class NavigationForegroundService : Service() {
                 NavState.Arrived -> {
                     val notif = buildNotification("You have arrived! 🎉", "Navigation complete")
                     getNotificationManager().notify(NOTIFICATION_ID, notif)
-                    delay(5_000)
+                    NavWidgetProvider.resetAll(this@NavigationForegroundService)
+                    delay(5_000.milliseconds)
                     stopSelf()
                 }
-                NavState.Idle -> stopSelf()
+                NavState.Idle -> {
+                    NavWidgetProvider.resetAll(this@NavigationForegroundService)
+                    stopSelf()
+                }
             }
         }
     }
@@ -143,16 +148,14 @@ class NavigationForegroundService : Service() {
     }
 
     private fun updateWidgets(banner: NavBanner) {
-        // Broadcast to lock screen and home widgets
-        val intent = Intent(NavWidgetProvider.ACTION_NAV_UPDATE).apply {
-            putExtra("instruction", banner.instructionText)
-            putExtra("maneuver", banner.maneuverSign)
-            putExtra("distToTurn", banner.distanceToManeuverMeters)
-            putExtra("remaining", banner.remainingMeters)
-            putExtra("remainingSec", banner.remainingSeconds)
-            setPackage(packageName)
-        }
-        sendBroadcast(intent)
+        NavWidgetProvider.updateAll(
+            this,
+            banner.instructionText,
+            banner.maneuverSign,
+            banner.distanceToManeuverMeters,
+            banner.remainingMeters,
+            banner.remainingSeconds,
+        )
     }
 
     private fun buildNotification(title: String, text: String): Notification {
