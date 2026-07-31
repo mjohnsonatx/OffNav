@@ -8,13 +8,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -32,6 +39,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.offnav.data.RouteHistoryEntry
 import com.example.offnav.location.LocationController
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.ActiveRoute
@@ -42,6 +50,8 @@ import kotlinx.coroutines.flow.StateFlow
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.location.modes.CameraMode
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
@@ -49,6 +59,9 @@ import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.sources.GeoJsonSource
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
 private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
@@ -58,7 +71,7 @@ private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 // ════════════════════════════════════════════════════════════════
 // Root
 // ════════════════════════════════════════════════════════════════
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapScreen(
     viewModel: MapViewModel,
@@ -76,129 +89,397 @@ fun MapScreen(
         )
     }
 
+    var showHistory by rememberSaveable { mutableStateOf(false) }
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+
     Box(Modifier.fillMaxSize()) {
         MapHost(viewModel, locationController, locationProvider, hasPermission)
-        DestinationSearchPanel(
-            viewModel,
-            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),
-        )
-        BannerHost(
-            viewModel,
-            Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                .padding(start = 12.dp, top = 84.dp, end = 12.dp),
-        )
-        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter))
+
+        Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
+            TopBar(onHistoryClick = { showHistory = true })
+            BannerHost(viewModel, Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
+        }
+
+        BottomPanel(viewModel, Modifier.align(Alignment.BottomCenter))
     }
-}
 
-// ════════════════════════════════════════════════════════════════
-// Map
-// ════════════════════════════════════════════════════════════════
-
-@Composable
-private fun DestinationSearchPanel(
-    viewModel: MapViewModel,
-    modifier: Modifier = Modifier,
-) {
-    val query by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val results by viewModel.searchResults.collectAsStateWithLifecycle()
-    val searching by viewModel.searching.collectAsStateWithLifecycle()
-    val error by viewModel.searchError.collectAsStateWithLifecycle()
-    val focusManager = LocalFocusManager.current
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val showResults = expanded && query.trim().length >= 2
-
-    Column(modifier.fillMaxWidth()) {
-        Surface(
-            tonalElevation = 6.dp,
-            shadowElevation = 4.dp,
-            shape = RoundedCornerShape(18.dp),
+    if (showHistory) {
+        ModalBottomSheet(
+            onDismissRequest = { showHistory = false },
+            sheetState = sheetState,
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = {
-                    expanded = true
-                    viewModel.updateSearchQuery(it)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Destination") },
-                placeholder = { Text("Address, restaurant, park, or business") },
-                singleLine = true,
-                trailingIcon = {
-                    if (query.isNotBlank()) {
-                        IconButton(onClick = {
-                            expanded = false
-                            viewModel.clearSearch()
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear destination")
-                        }
-                    }
+            HistorySheet(
+                viewModel = viewModel,
+                onPick = { entry ->
+                    viewModel.routeToHistory(entry)
+                    showHistory = false
                 },
             )
         }
+    }
+}
 
-        AnimatedVisibility(showResults) {
-            Surface(
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).heightIn(max = 320.dp),
-                tonalElevation = 8.dp,
-                shadowElevation = 6.dp,
-                shape = RoundedCornerShape(16.dp),
-            ) {
-                when {
-                    searching -> Row(
-                        Modifier.fillMaxWidth().padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text("Searching offline Austin data...")
+@Composable
+private fun TopBar(onHistoryClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .statusBarsPadding()
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp,
+    ) {
+        Row(
+            Modifier.clickable(onClick = onHistoryClick).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.Search, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                "Search recent destinations",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(Icons.Default.History, contentDescription = "History")
+        }
+    }
+}
+
+@Composable
+private fun BottomPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+    val nav by viewModel.navState.collectAsStateWithLifecycle()
+
+    Box(modifier.navigationBarsPadding().padding(12.dp)) {
+        when (nav) {
+            NavState.Idle -> RoutePreviewCard(viewModel)
+            else -> NavPanel(viewModel)      // your existing composable
+        }
+    }
+}
+
+@Composable
+private fun RoutePreviewCard(viewModel: MapViewModel) {
+    val summary by viewModel.routeSummary.collectAsStateWithLifecycle()
+    val s = summary ?: return
+    var showSteps by remember { mutableStateOf(false) }
+
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 4.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(s.destinationLabel, style = MaterialTheme.typography.titleLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (s.destinationSubtitle.isNotBlank()) {
+                Text(s.destinationSubtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(s.durationText, style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "${s.distanceText} · arrive ${s.arrivalText}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = viewModel::startNavigation, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Navigation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start")
+                }
+                FilledTonalButton(onClick = { showSteps = true }) {
+                    Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("${s.stepCount} steps")
+                }
+                FilledTonalIconButton(onClick = viewModel::clearRoute) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear route")
+                }
+            }
+        }
+    }
+
+    if (showSteps) {
+        DirectionsList(viewModel, currentIndex = -1, onDismiss = { showSteps = false })
+    }
+}
+
+@Composable
+fun HistorySheet(
+    viewModel: MapViewModel,
+    onPick: (RouteHistoryEntry) -> Unit,
+) {
+    val query by viewModel.historyQuery.collectAsStateWithLifecycle()
+    val items by viewModel.history.collectAsStateWithLifecycle()
+
+    Column(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+
+        OutlinedTextField(
+            value = query,
+            onValueChange = viewModel::onHistoryQueryChange,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            placeholder = { Text("Search previous routes") },
+            leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = {
+                if (query.isNotEmpty()) {
+                    IconButton(onClick = { viewModel.onHistoryQueryChange("") }) {
+                        Icon(Icons.Default.Close, "Clear")
                     }
-                    error != null -> Text(
-                        error ?: "Offline Austin search failed",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.error,
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(24.dp),
+        )
+
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (query.isBlank()) "Recent" else "${items.size} results",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (query.isBlank() && items.isNotEmpty()) {
+                TextButton(onClick = viewModel::clearHistory) { Text("Clear") }
+            }
+        }
+
+        if (items.isEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(48.dp), Alignment.Center) {
+                Text(
+                    if (query.isBlank()) "No routes yet — long-press the map to create one"
+                    else "No matches",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding()) {
+                items(items, key = { it.id }) { entry ->
+                    HistoryRow(
+                        entry = entry,
+                        onClick = { onPick(entry) },
+                        onPinToggle = { viewModel.togglePin(entry.id, !entry.pinned) },
+                        onDelete = { viewModel.deleteHistory(entry.id) },
                     )
-                    results.isEmpty() -> Text(
-                        "No Austin matches",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    else -> LazyColumn {
-                        itemsIndexed(
-                            items = results,
-                            key = { index, result ->
-                                "${result.name}:${result.latitude}:${result.longitude}:$index"
-                            },
-                        ) { _, result ->
-                            Column(
-                                Modifier.fillMaxWidth().clickable {
-                                    expanded = false
-                                    focusManager.clearFocus()
-                                    viewModel.selectSearchResult(result)
-                                }.padding(horizontal = 16.dp, vertical = 12.dp)
-                            ) {
-                                Text(
-                                    result.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    result.subtitle,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            HorizontalDivider()
-                        }
-                    }
+                    HorizontalDivider(Modifier.padding(start = 56.dp))
                 }
             }
         }
     }
 }
+
+@Composable
+private fun HistoryRow(
+    entry: RouteHistoryEntry,
+    onClick: () -> Unit,
+    onPinToggle: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            if (entry.pinned) Icons.Default.Star else Icons.Default.History,
+            contentDescription = null,
+            tint = if (entry.pinned) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(entry.label, style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                "${entry.distanceText} · ${entry.durationText} · ${entry.relativeTimeText}" +
+                        if (entry.useCount > 1) " · ${entry.useCount}×" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Default.MoreVert, contentDescription = "More")
+            }
+            DropdownMenu(menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text(if (entry.pinned) "Unpin" else "Pin") },
+                    onClick = { menuOpen = false; onPinToggle() },
+                    leadingIcon = { Icon(Icons.Default.Star, null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Delete") },
+                    onClick = { menuOpen = false; onDelete() },
+                    leadingIcon = { Icon(Icons.Default.Delete, null) },
+                )
+            }
+        }
+    }
+}
+
+//@Composable
+//fun MapScreen(
+//    viewModel: MapViewModel,
+//    locationController: LocationController,
+//    locationProvider: LocationProvider,
+//) {
+//    var hasPermission by remember { mutableStateOf(locationProvider.hasPermission()) }
+//    val launcher = rememberLauncherForActivityResult(
+//        ActivityResultContracts.RequestMultiplePermissions()
+//    ) { hasPermission = it.values.any { g -> g } }
+//
+//    LaunchedEffect(Unit) {
+//        if (!hasPermission) launcher.launch(
+//            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+//        )
+//    }
+//
+//    Box(Modifier.fillMaxSize()) {
+//        MapHost(viewModel, locationController, locationProvider, hasPermission)
+////        DestinationSearchPanel(
+////            viewModel,
+////            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),
+////        )
+//        BannerHost(
+//            viewModel,
+//            Modifier.align(Alignment.TopCenter).statusBarsPadding()
+//                .padding(start = 12.dp, top = 84.dp, end = 12.dp),
+//        )
+//        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter))
+//    }
+//}
+
+// ════════════════════════════════════════════════════════════════
+// Map
+// ════════════════════════════════════════════════════════════════
+
+//@Composable
+//private fun DestinationSearchPanel(
+//    viewModel: MapViewModel,
+//    modifier: Modifier = Modifier,
+//) {
+//    val query by viewModel.searchQuery.collectAsStateWithLifecycle()
+//    val results by viewModel.searchResults.collectAsStateWithLifecycle()
+//    val searching by viewModel.searching.collectAsStateWithLifecycle()
+//    val error by viewModel.searchError.collectAsStateWithLifecycle()
+//    val focusManager = LocalFocusManager.current
+//    var expanded by rememberSaveable { mutableStateOf(false) }
+//    val showResults = expanded && query.trim().length >= 2
+//
+//    Column(modifier.fillMaxWidth()) {
+//        Surface(
+//            tonalElevation = 6.dp,
+//            shadowElevation = 4.dp,
+//            shape = RoundedCornerShape(18.dp),
+//        ) {
+//            OutlinedTextField(
+//                value = query,
+//                onValueChange = {
+//                    expanded = true
+//                    viewModel.updateSearchQuery(it)
+//                },
+//                modifier = Modifier.fillMaxWidth(),
+//                label = { Text("Destination") },
+//                placeholder = { Text("Address, restaurant, park, or business") },
+//                singleLine = true,
+//                trailingIcon = {
+//                    if (query.isNotBlank()) {
+//                        IconButton(onClick = {
+//                            expanded = false
+//                            viewModel.clearSearch()
+//                        }) {
+//                            Icon(Icons.Default.Close, contentDescription = "Clear destination")
+//                        }
+//                    }
+//                },
+//            )
+//        }
+//
+//        AnimatedVisibility(showResults) {
+//            Surface(
+//                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).heightIn(max = 320.dp),
+//                tonalElevation = 8.dp,
+//                shadowElevation = 6.dp,
+//                shape = RoundedCornerShape(16.dp),
+//            ) {
+//                when {
+//                    searching -> Row(
+//                        Modifier.fillMaxWidth().padding(16.dp),
+//                        verticalAlignment = Alignment.CenterVertically,
+//                    ) {
+//                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+//                        Spacer(Modifier.width(12.dp))
+//                        Text("Searching offline Austin data...")
+//                    }
+//                    error != null -> Text(
+//                        error ?: "Offline Austin search failed",
+//                        modifier = Modifier.padding(16.dp),
+//                        color = MaterialTheme.colorScheme.error,
+//                    )
+//                    results.isEmpty() -> Text(
+//                        "No Austin matches",
+//                        modifier = Modifier.padding(16.dp),
+//                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+//                    )
+//                    else -> LazyColumn {
+//                        itemsIndexed(
+//                            items = results,
+//                            key = { index, result ->
+//                                "${result.name}:${result.latitude}:${result.longitude}:$index"
+//                            },
+//                        ) { _, result ->
+//                            Column(
+//                                Modifier.fillMaxWidth().clickable {
+//                                    expanded = false
+//                                    focusManager.clearFocus()
+//                                    viewModel.selectSearchResult(result)
+//                                }.padding(horizontal = 16.dp, vertical = 12.dp)
+//                            ) {
+//                                Text(
+//                                    result.name,
+//                                    style = MaterialTheme.typography.titleSmall,
+//                                    maxLines = 1,
+//                                    overflow = TextOverflow.Ellipsis,
+//                                )
+//                                Text(
+//                                    result.subtitle,
+//                                    style = MaterialTheme.typography.bodySmall,
+//                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+//                                    maxLines = 1,
+//                                    overflow = TextOverflow.Ellipsis,
+//                                )
+//                            }
+//                            HorizontalDivider()
+//                        }
+//                    }
+//                }
+//            }
+//        }
+//    }
+//}
 
 @Composable
 private fun MapHost(
@@ -218,7 +499,7 @@ private fun MapHost(
             locationProvider = locationProvider,
             activeRoute = viewModel.activeRoute,
             viewModel = viewModel,
-            onLongPress = viewModel::requestRoute,
+            onLongPress = { from, to, label, subtitle -> viewModel.requestRoute(from, to, label, subtitle) }
         )
     }
 }
@@ -231,7 +512,8 @@ private fun MapLibreCanvas(
     locationProvider: LocationProvider,
     activeRoute: StateFlow<ActiveRoute?>,
     viewModel: MapViewModel,
-    onLongPress: (LatLng, LatLng) -> Unit,
+    // signature change
+    onLongPress: (from: LatLng, to: LatLng, label: String, subtitle: String) -> Unit,
 ) {
     val context = LocalContext.current
     val mapView = remember {
@@ -280,11 +562,13 @@ private fun MapLibreCanvas(
             }
             map.uiSettings.isRotateGesturesEnabled = true
             map.addOnMapLongClickListener { target ->
-                locationProvider.lastFix.value?.let {
-                    longPress(LatLng(it.latitude, it.longitude), target)
+                locationProvider.lastFix.value?.let { fix ->
+                    val named = PlaceNamer.nameAt(map, target)     // main thread — required by MapLibre
+                    longPress(LatLng(fix.latitude, fix.longitude), target, named.label, named.subtitle)
                 }
                 true
             }
+
             locationProvider.lastFix.value?.let {
                 map.cameraPosition = CameraPosition.Builder()
                     .target(LatLng(it.latitude, it.longitude)).zoom(INITIAL_LOCATION_ZOOM).build()
@@ -339,6 +623,15 @@ private fun MapLibreCanvas(
                 CameraCommand.ReturnToTracking -> {
                     map.locationComponent.cameraMode =
                         org.maplibre.android.location.modes.CameraMode.TRACKING_GPS
+                }
+
+                // camera commands
+                is CameraCommand.FitBounds -> {
+                    if (cmd.points.size >= 2) {
+                        val bounds = LatLngBounds.Builder().includes(cmd.points).build()
+                        map.locationComponent.cameraMode = CameraMode.NONE
+                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 120, 220, 120, 420), 900)
+                    }
                 }
             }
         }
@@ -495,6 +788,14 @@ private fun TurnBannerCard(banner: NavBanner, isRerouting: Boolean) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        "${formatDistance(banner.remainingMeters)} · " +
+                                "${formatEta(banner.remainingSeconds)} · " +
+                                "arrive ${arrivalClock(banner.remainingSeconds)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
                 }
             }
 
@@ -519,6 +820,12 @@ private fun TurnBannerCard(banner: NavBanner, isRerouting: Boolean) {
     }
 }
 
+private fun arrivalClock(remainingSeconds: Int): String {
+    val cal = Calendar.getInstance().apply {
+        timeInMillis = System.currentTimeMillis() + remainingSeconds * 1000L
+    }
+    return SimpleDateFormat("h:mm a", Locale.getDefault()).format(cal.time)
+}
 // ════════════════════════════════════════════════════════════════
 // Directions list (scrollable, tappable steps)
 // ════════════════════════════════════════════════════════════════
