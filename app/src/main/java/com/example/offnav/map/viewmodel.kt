@@ -9,10 +9,12 @@ import com.example.offnav.data.formatDuration
 import com.example.offnav.data.formatMeters
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.NavigationEngine
+import com.example.offnav.navigation.TripPlanner
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
 import com.example.offnav.routing.TurnInstruction
+import com.example.offnav.search.PlaceCategory
 import com.example.offnav.search.PlaceSearchRepository
 import com.example.offnav.search.PlaceSearchResult
 import kotlinx.coroutines.CancellationException
@@ -30,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -69,6 +72,7 @@ sealed interface CameraCommand {
     data object ReturnToTracking : CameraCommand
 }
 
+@OptIn(FlowPreview::class)
 class MapViewModel(
     private val tileAssetManager: TileAssetManager,
     private val routingEngine: GraphHopperEngine,
@@ -85,6 +89,11 @@ class MapViewModel(
     // ── Current route ──
     private val _route = MutableStateFlow<RouteResult?>(null)
     private val _destinationLabel = MutableStateFlow(PlaceLabelUi("", ""))
+
+    val tripPlanner = TripPlanner()
+    val stops = tripPlanner.stops
+    /** Debounced route recomputation when stops change. */
+    private var recomputeJob: Job? = null
 
     val hasRoute: StateFlow<Boolean> =
         _route.map { it != null }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -148,7 +157,7 @@ class MapViewModel(
 
         _placeSearching.value = true
         placeSearchJob = viewModelScope.launch {
-            delay(180)
+            delay(180.milliseconds)
             try {
                 _placeResults.value = withContext(Dispatchers.IO) {
                     placeSearchRepository.search(requestedQuery)
@@ -204,12 +213,74 @@ class MapViewModel(
             }
         }
         viewModelScope.launch { routingEngine.initialize() }
+
+        viewModelScope.launch {
+            tripPlanner.stops
+                .drop(1)  // skip initial empty
+                .debounce(400.milliseconds)
+                .distinctUntilChanged()
+                .collect { recomputeRoute() }
+        }
+
+        viewModelScope.launch {
+            _selectedCategories.collect { runNearbySearch() }
+        }
     }
 
-    // ── Routing ──
-    private var destination: LatLng? = null
-    private var routeJob: Job? = null
+    /** Recompute the full multi-point route from current GPS through all stops. */
+    private fun recomputeRoute() {
+        if (!routingEngine.isReady) return
+        val fix = locationProvider.lastFix.value ?: return
+        val stopPoints = tripPlanner.routePoints
+        if (stopPoints.isEmpty()) {
+            clearRoute()
+            return
+        }
+        val allPoints = listOf(LatLng(fix.latitude, fix.longitude)) + stopPoints
+        recomputeJob?.cancel()
+        recomputeJob = viewModelScope.launch(Dispatchers.Default) {
+            routingEngine.route(allPoints)
+                .onSuccess { result ->
+                    _route.value = result
+                    _transient.value = null
+                    navigationEngine.preview(result)
+                    _cameraCommands.trySend(CameraCommand.FitBounds(result.points))
+                    // Record destination in history
+                    tripPlanner.destination?.let { dest ->
+                        historyRepository.record(
+                            allPoints.first(), dest.point,
+                            dest.label, dest.subtitle, result
+                        )
+                    }
+                }
+                .onFailure { _transient.value = "Route error: ${it.message}" }
+        }
+    }
 
+    /** Add a stop to the current trip. */
+    fun addStop(label: String, subtitle: String, point: LatLng) {
+        if (tripPlanner.isEmpty) {
+            // No destination yet — treat as destination
+            requestRoute(
+                LatLng(locationProvider.lastFix.value?.latitude ?: return,
+                    locationProvider.lastFix.value?.longitude ?: return),
+                point, label, subtitle
+            )
+            return
+        }
+        tripPlanner.addWaypoint(label, subtitle, point)
+        // recompute triggered by flow
+    }
+
+    fun removeStop(id: Long) {
+        tripPlanner.removeStop(id)
+        if (tripPlanner.isEmpty) clearRoute()
+    }
+    fun moveStop(from: Int, to: Int) {
+        tripPlanner.moveStop(from, to)
+    }
+
+    // ── Update requestRoute to go through TripPlanner ──
     fun requestRoute(from: LatLng, to: LatLng, label: String = "", subtitle: String = "") {
         if (!routingEngine.isReady) {
             _transient.value = "Routing engine still preparing — please wait"
@@ -217,33 +288,30 @@ class MapViewModel(
         }
         destination = to
         _destinationLabel.value = PlaceLabelUi(label, subtitle)
-        routeJob?.cancel()
-        routeJob = viewModelScope.launch(Dispatchers.Default) {
-            routingEngine.route(from, to)
-                .onSuccess { result ->
-                    _route.value = result
-                    _transient.value = null
-                    navigationEngine.preview(result)
-                    _cameraCommands.trySend(CameraCommand.FitBounds(result.points))
-                    historyRepository.record(from, to, label, subtitle, result)
-                }
-                .onFailure { _transient.value = "Route error: ${it.message}" }
-        }
+        // Set destination in the planner (clears previous waypoints)
+        tripPlanner.clear()
+        tripPlanner.setDestination(label, subtitle, to)
+        // Route recomputation is triggered by the stops flow observer
     }
 
-    /** Re-route to a saved destination from the current position. */
+    // ── Routing ──
+    private var destination: LatLng? = null
+    private var routeJob: Job? = null
+
     fun routeToHistory(entry: RouteHistoryEntry) {
         clearDestinationQuery()
-        _cameraCommands.trySend(CameraCommand.FlyTo(entry.destination, zoom = 16.5))
-        routeFromCurrent(entry.destination, entry.label, entry.subtitle)
+        tripPlanner.clear()
+        tripPlanner.setDestination(entry.label, entry.subtitle, entry.destination)
+        _destinationLabel.value = PlaceLabelUi(entry.label, entry.subtitle)
+        destination = entry.destination
     }
-
-    /** Resolve a new offline place result through the same route/history pipeline. */
     fun routeToPlace(result: PlaceSearchResult) {
         clearDestinationQuery()
         val target = LatLng(result.latitude, result.longitude)
-        _cameraCommands.trySend(CameraCommand.FlyTo(target, zoom = 16.5))
-        routeFromCurrent(target, result.name, result.subtitle)
+        tripPlanner.clear()
+        tripPlanner.setDestination(result.name, result.subtitle, target)
+        _destinationLabel.value = PlaceLabelUi(result.name, result.subtitle)
+        destination = target
     }
 
     private fun routeFromCurrent(target: LatLng, label: String, subtitle: String) {
@@ -291,5 +359,73 @@ class MapViewModel(
     private fun clockAfter(millisFromNow: Long): String {
         val cal = Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() + millisFromNow }
         return SimpleDateFormat("h:mm a", Locale.getDefault()).format(cal.time)
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // NEW: Nearby search with categories
+    // ═══════════════════════════════════════════════════════════
+    private val _nearbyQuery = MutableStateFlow("")
+    val nearbyQuery = _nearbyQuery.asStateFlow()
+    private val _selectedCategories = MutableStateFlow<Set<PlaceCategory>>(emptySet())
+    val selectedCategories = _selectedCategories.asStateFlow()
+    private val _nearbyResults = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
+    val nearbyResults = _nearbyResults.asStateFlow()
+    private val _nearbySearching = MutableStateFlow(false)
+    val nearbySearching = _nearbySearching.asStateFlow()
+    private var nearbyJob: Job? = null
+    fun onNearbyQueryChange(query: String) {
+        _nearbyQuery.value = query
+        runNearbySearch()
+    }
+    fun toggleCategory(category: PlaceCategory) {
+        _selectedCategories.value = _selectedCategories.value.let { current ->
+            if (category in current) current - category else current + category
+        }
+        runNearbySearch()
+    }
+    fun clearNearbySearch() {
+        _nearbyQuery.value = ""
+        _selectedCategories.value = emptySet()
+        _nearbyResults.value = emptyList()
+    }
+    private fun runNearbySearch() {
+        nearbyJob?.cancel()
+        val query = _nearbyQuery.value.trim()
+        val cats = _selectedCategories.value
+        val fix = locationProvider.lastFix.value
+        if (fix == null) {
+            _nearbyResults.value = emptyList()
+            return
+        }
+        // If no query and no categories, show nothing (or could show popular nearby)
+        if (query.isEmpty() && cats.isEmpty()) {
+            _nearbyResults.value = emptyList()
+            _nearbySearching.value = false
+            return
+        }
+        _nearbySearching.value = true
+        nearbyJob = viewModelScope.launch {
+            delay(200.milliseconds)   // debounce
+            try {
+                val center = LatLng(fix.latitude, fix.longitude)
+                val results = withContext(Dispatchers.IO) {
+                    placeSearchRepository.searchNearby(
+                        center = center,
+                        radiusMeters = 10_000.0,
+                        query = query,
+                        categories = cats,
+                        limit = 50,
+                    )
+                }
+                _nearbyResults.value = results
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("MapViewModel", "Nearby search failed", e)
+                _nearbyResults.value = emptyList()
+            } finally {
+                _nearbySearching.value = false
+            }
+        }
     }
 }

@@ -2,15 +2,31 @@ package com.example.offnav.search
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.maplibre.android.geometry.LatLng
 import java.io.File
+import kotlin.collections.buildList
+import kotlin.math.cos
+import kotlin.math.hypot
 
 data class PlaceSearchResult(
     val name: String,
     val subtitle: String,
-    val category: String,
+    val category: String,       // human-readable, e.g. "Restaurant"
+    val osmClass: String,       // raw class from your index, e.g. "restaurant"
     val latitude: Double,
     val longitude: Double,
-)
+    /** Filled in after search when sorted by distance. */
+    val distanceMeters: Double = 0.0,
+) {
+    val distanceText: String
+        get() = when {
+            distanceMeters >= 10_000 -> "%.0f km".format(distanceMeters / 1000.0)
+            distanceMeters >= 1_000  -> "%.1f km".format(distanceMeters / 1000.0)
+            else                     -> "${distanceMeters.toInt()} m"
+        }
+}
 
 private data class RankedPlaceSearchResult(
     val place: PlaceSearchResult,
@@ -23,12 +39,23 @@ class PlaceSearchRepository(context: Context) {
         private const val SEARCH_FILE = "austin_places.db"
         private const val DEFAULT_LIMIT = 12
         private val WORD = Regex("[\\p{L}\\p{N}]+")
+
+        fun haversineMeters(center: LatLng, lat: Double, lon: Double): Double {
+            val mLat = 111_132.0
+            val mLon = 111_320.0 * cos(Math.toRadians((center.latitude + lat) * 0.5))
+            return hypot((lat - center.latitude) * mLat, (lon - center.longitude) * mLon)
+        }
     }
 
     private val appContext = context.applicationContext
 
     @Volatile
     private var database: SQLiteDatabase? = null
+
+    private val dbPath = context.getDatabasePath("austin_places.db").absolutePath
+    private val db: SQLiteDatabase by lazy {
+        SQLiteDatabase.openDatabase(dbPath, null, SQLiteDatabase.OPEN_READONLY)
+    }
 
     fun search(query: String, limit: Int = DEFAULT_LIMIT): List<PlaceSearchResult> {
         val tokens = searchTokens(query)
@@ -55,6 +82,61 @@ class PlaceSearchRepository(context: Context) {
             .map { it.place }
     }
 
+    /**
+     * Search within [radiusMeters] of [center], optionally filtered by [categories]
+     * and/or a text [query]. Results sorted by distance from [center].
+     */
+    suspend fun searchNearby(
+        center: LatLng,
+        radiusMeters: Double = 5_000.0,
+        query: String = "",
+        categories: Set<PlaceCategory> = emptySet(),
+        limit: Int = 60,
+    ): List<PlaceSearchResult> = withContext(Dispatchers.IO) {
+        // Bounding box (equirectangular approximation)
+        val dLat = radiusMeters / 111_132.0
+        val dLon = radiusMeters / (111_320.0 * cos(Math.toRadians(center.latitude)))
+        val minLat = center.latitude - dLat
+        val maxLat = center.latitude + dLat
+        val minLon = center.longitude - dLon
+        val maxLon = center.longitude + dLon
+        val clauses = mutableListOf("lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?")
+        val args = mutableListOf(
+            minLat.toString(), maxLat.toString(),
+            minLon.toString(), maxLon.toString(),
+        )
+        // Category filter
+        if (categories.isNotEmpty()) {
+            val allClasses = categories.flatMap { it.osmClasses }.toSet()
+            val placeholders = allClasses.joinToString(",") { "?" }
+            clauses += "class IN ($placeholders)"
+            args += allClasses
+        }
+        // Text filter
+        if (query.isNotBlank()) {
+            clauses += "(name LIKE ? COLLATE NOCASE OR street LIKE ? COLLATE NOCASE)"
+            val wild = "%${query.trim()}%"
+            args += wild
+            args += wild
+        }
+        val where = clauses.joinToString(" AND ")
+        // Fetch more than limit, then sort/trim client-side (SQLite can't do haversine ORDER BY)
+        val fetchLimit = limit * 3
+        val sql = """
+            SELECT name, class, subclass, housenumber, street, lat, lon
+            FROM places
+            WHERE $where
+            LIMIT $fetchLimit
+        """.trimIndent()
+        val raw = db.rawQuery(sql, args.toTypedArray()).use { c ->
+            buildList { while (c.moveToNext()) add(c.toResult()) }
+        }
+        // Compute distances and sort
+        raw.map { it.copy(distanceMeters = haversineMeters(center, it.latitude, it.longitude)) }
+            .sortedBy { it.distanceMeters }
+            .take(limit)
+    }
+
     private fun queryCandidates(
         db: SQLiteDatabase,
         matchQuery: String,
@@ -79,10 +161,11 @@ class PlaceSearchRepository(context: Context) {
                                 name = cursor.getString(0),
                                 subtitle = cursor.getString(1),
                                 category = cursor.getString(2),
-                                latitude = cursor.getDouble(3),
-                                longitude = cursor.getDouble(4),
+                                osmClass = cursor.getString(3),
+                                latitude = cursor.getDouble(4),
+                                longitude = cursor.getDouble(5),
                             ),
-                            sourceRank = cursor.getInt(5),
+                            sourceRank = cursor.getInt(6),
                         )
                     )
                 }
@@ -162,4 +245,28 @@ class PlaceSearchRepository(context: Context) {
         }
         return if (allTokensMatchName) 0 else 1
     }
+
+    private fun android.database.Cursor.toResult(): PlaceSearchResult {
+        val name = getString(0) ?: ""
+        val cls = getString(1) ?: ""
+        val sub = getString(2) ?: ""
+        val house = getString(3) ?: ""
+        val street = getString(4) ?: ""
+        val lat = getDouble(5)
+        val lon = getDouble(6)
+        val subtitle = buildString {
+            if (house.isNotBlank()) append("$house ")
+            if (street.isNotBlank()) append(street)
+        }.trim()
+        return PlaceSearchResult(
+            name = name.ifBlank { subtitle.ifBlank { "%.5f, %.5f".format(lat, lon) } },
+            subtitle = subtitle,
+            category = sub.ifBlank { cls }.replaceFirstChar { it.uppercase() },
+            osmClass = cls,
+            latitude = lat,
+            longitude = lon,
+        )
+    }
+
+
 }

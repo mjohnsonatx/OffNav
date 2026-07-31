@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
@@ -47,7 +48,9 @@ import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
 import com.example.offnav.routing.TurnInstruction
+import com.example.offnav.search.NearbySearchSheet
 import com.example.offnav.search.PlaceSearchResult
+import com.example.offnav.ui.theme.ui.StopListCard
 import kotlinx.coroutines.flow.StateFlow
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -169,11 +172,15 @@ private fun BottomPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) 
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RoutePreviewCard(viewModel: MapViewModel) {
     val summary by viewModel.routeSummary.collectAsStateWithLifecycle()
     val s = summary ?: return
+    val stops by viewModel.stops.collectAsStateWithLifecycle()
     var showSteps by remember { mutableStateOf(false) }
+    var showAddStop by remember { mutableStateOf(false) }
+    val addStopSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
     Surface(
         shape = MaterialTheme.shapes.large,
@@ -182,19 +189,41 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(16.dp)) {
-            Text(s.destinationLabel, style = MaterialTheme.typography.titleLarge,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // Destination header
+            Text(
+                s.destinationLabel,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
             if (s.destinationSubtitle.isNotBlank()) {
-                Text(s.destinationSubtitle, style = MaterialTheme.typography.bodySmall,
+                Text(
+                    s.destinationSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
 
+            // Stop list (if there are waypoints)
+            if (stops.size > 1) {   // destination + at least one waypoint
+                StopListCard(
+                    stops = stops,
+                    onRemove = viewModel::removeStop,
+                    onMoveUp = { i -> viewModel.moveStop(i, i - 1) },
+                    onMoveDown = { i -> viewModel.moveStop(i, i + 1) },
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            // Route summary
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(s.durationText, style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary)
+                Text(
+                    s.durationText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
                 Spacer(Modifier.width(12.dp))
                 Text(
                     "${s.distanceText} · arrive ${s.arrivalText}",
@@ -206,17 +235,24 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
 
             Spacer(Modifier.height(14.dp))
 
+            // Action buttons
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = viewModel::startNavigation, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Default.Navigation, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Start")
                 }
+                FilledTonalButton(onClick = { showAddStop = true }) {
+                    Icon(Icons.Default.AddLocation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Stop")
+                }
                 FilledTonalButton(onClick = { showSteps = true }) {
                     Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("${s.stepCount} steps")
+                    Spacer(Modifier.width(4.dp))
+                    Text("${s.stepCount}")
                 }
+
                 FilledTonalIconButton(onClick = viewModel::clearRoute) {
                     Icon(Icons.Default.Close, contentDescription = "Clear route")
                 }
@@ -224,8 +260,37 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
         }
     }
 
+    // Steps sheet
     if (showSteps) {
         DirectionsList(viewModel, currentIndex = -1, onDismiss = { showSteps = false })
+    }
+
+    // Add-stop nearby search sheet
+    if (showAddStop) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                viewModel.clearNearbySearch()
+                showAddStop = false
+            },
+            sheetState = addStopSheetState,
+        ) {
+            NearbySearchSheet(
+                viewModel = viewModel,
+                onPick = { result ->
+                    viewModel.addStop(
+                        label = result.name,
+                        subtitle = result.subtitle,
+                        point = LatLng(result.latitude, result.longitude),
+                    )
+                    viewModel.clearNearbySearch()
+                    showAddStop = false
+                },
+                onDismiss = {
+                    viewModel.clearNearbySearch()
+                    showAddStop = false
+                },
+            )
+        }
     }
 }
 
@@ -686,6 +751,7 @@ private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
                         Spacer(Modifier.width(6.dp))
                         Text(if (showDirections) "Hide steps" else "Steps")
                     }
+
                     // Return to tracking after browsing an instruction
                     FilledTonalButton(onClick = viewModel::returnToTracking) {
                         Icon(Icons.Default.MyLocation, contentDescription = null, Modifier.size(18.dp))
