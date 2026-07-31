@@ -3,6 +3,7 @@ package com.example.offnav.data
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import java.util.Locale
 
 @Entity(
     tableName = "route_history",
@@ -36,6 +37,7 @@ data class RouteHistoryEntity(
     val pinned: Boolean = false,
 ) {
     companion object {
-        fun destKeyOf(lat: Double, lon: Double): String = "%.5f,%.5f".format(lat, lon)
+        fun destKeyOf(lat: Double, lon: Double): String =
+            String.format(Locale.ROOT, "%.5f,%.5f", lat, lon)
     }
 }

@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
                             container.navigationEngine,
                             container.locationProvider,
                             container.historyRepository,
+                            container.placeSearchRepository,
                         ) as T
                 }
             )

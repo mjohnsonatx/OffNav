@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
@@ -46,6 +47,7 @@ import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
 import com.example.offnav.routing.TurnInstruction
+import com.example.offnav.search.PlaceSearchResult
 import kotlinx.coroutines.flow.StateFlow
 import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.camera.CameraUpdateFactory
@@ -89,30 +91,37 @@ fun MapScreen(
         )
     }
 
-    var showHistory by rememberSaveable { mutableStateOf(false) }
+    var showDestinationSearch by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
 
     Box(Modifier.fillMaxSize()) {
         MapHost(viewModel, locationController, locationProvider, hasPermission)
 
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-            TopBar(onHistoryClick = { showHistory = true })
+            TopBar(onSearchClick = { showDestinationSearch = true })
             BannerHost(viewModel, Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
         }
 
         BottomPanel(viewModel, Modifier.align(Alignment.BottomCenter))
     }
 
-    if (showHistory) {
+    if (showDestinationSearch) {
         ModalBottomSheet(
-            onDismissRequest = { showHistory = false },
+            onDismissRequest = {
+                viewModel.clearDestinationQuery()
+                showDestinationSearch = false
+            },
             sheetState = sheetState,
         ) {
-            HistorySheet(
+            DestinationSearchSheet(
                 viewModel = viewModel,
-                onPick = { entry ->
+                onHistoryPick = { entry ->
                     viewModel.routeToHistory(entry)
-                    showHistory = false
+                    showDestinationSearch = false
+                },
+                onPlacePick = { result ->
+                    viewModel.routeToPlace(result)
+                    showDestinationSearch = false
                 },
             )
         }
@@ -120,7 +129,7 @@ fun MapScreen(
 }
 
 @Composable
-private fun TopBar(onHistoryClick: () -> Unit) {
+private fun TopBar(onSearchClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .statusBarsPadding()
@@ -131,14 +140,14 @@ private fun TopBar(onHistoryClick: () -> Unit) {
         shadowElevation = 3.dp,
     ) {
         Row(
-            Modifier.clickable(onClick = onHistoryClick).padding(horizontal = 16.dp, vertical = 12.dp),
+            Modifier.clickable(onClick = onSearchClick).padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.Search, contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(12.dp))
             Text(
-                "Search recent destinations",
+                "Search Austin or recent destinations",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
@@ -221,24 +230,38 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
 }
 
 @Composable
-fun HistorySheet(
+fun DestinationSearchSheet(
     viewModel: MapViewModel,
-    onPick: (RouteHistoryEntry) -> Unit,
+    onHistoryPick: (RouteHistoryEntry) -> Unit,
+    onPlacePick: (PlaceSearchResult) -> Unit,
 ) {
-    val query by viewModel.historyQuery.collectAsStateWithLifecycle()
-    val items by viewModel.history.collectAsStateWithLifecycle()
+    val query by viewModel.destinationQuery.collectAsStateWithLifecycle()
+    val historyItems by viewModel.history.collectAsStateWithLifecycle()
+    val placeItems by viewModel.placeResults.collectAsStateWithLifecycle()
+    val placeSearching by viewModel.placeSearching.collectAsStateWithLifecycle()
+    val placeError by viewModel.placeSearchError.collectAsStateWithLifecycle()
+    val historyDestinationKeys = remember(historyItems) {
+        historyItems.mapTo(mutableSetOf()) { entry ->
+            coordinateKey(entry.destination.latitude, entry.destination.longitude)
+        }
+    }
+    val visiblePlaceItems = remember(placeItems, historyDestinationKeys) {
+        placeItems.filterNot { result ->
+            coordinateKey(result.latitude, result.longitude) in historyDestinationKeys
+        }
+    }
 
     Column(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-
         OutlinedTextField(
             value = query,
-            onValueChange = viewModel::onHistoryQueryChange,
+            onValueChange = viewModel::onDestinationQueryChange,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            placeholder = { Text("Search previous routes") },
+            label = { Text("Destination") },
+            placeholder = { Text("Address, restaurant, park, or business") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.onHistoryQueryChange("") }) {
+                    IconButton(onClick = viewModel::clearDestinationQuery) {
                         Icon(Icons.Default.Close, "Clear")
                     }
                 }
@@ -253,20 +276,19 @@ fun HistorySheet(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                if (query.isBlank()) "Recent" else "${items.size} results",
+                if (query.isBlank()) "Recent destinations" else "Search results",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (query.isBlank() && items.isNotEmpty()) {
+            if (query.isBlank() && historyItems.isNotEmpty()) {
                 TextButton(onClick = viewModel::clearHistory) { Text("Clear") }
             }
         }
 
-        if (items.isEmpty()) {
+        if (query.isBlank() && historyItems.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(48.dp), Alignment.Center) {
                 Text(
-                    if (query.isBlank()) "No routes yet — long-press the map to create one"
-                    else "No matches",
+                    "No recent routes yet. Search above to find an Austin destination.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -274,19 +296,117 @@ fun HistorySheet(
             }
         } else {
             LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding()) {
-                items(items, key = { it.id }) { entry ->
-                    HistoryRow(
-                        entry = entry,
-                        onClick = { onPick(entry) },
-                        onPinToggle = { viewModel.togglePin(entry.id, !entry.pinned) },
-                        onDelete = { viewModel.deleteHistory(entry.id) },
-                    )
-                    HorizontalDivider(Modifier.padding(start = 56.dp))
+                if (historyItems.isNotEmpty()) {
+                    if (query.isNotBlank()) {
+                        item(key = "history-header") { SearchSectionHeader("Recent destinations") }
+                    }
+                    items(historyItems, key = { "history:${it.id}" }) { entry ->
+                        HistoryRow(
+                            entry = entry,
+                            onClick = { onHistoryPick(entry) },
+                            onPinToggle = { viewModel.togglePin(entry.id, !entry.pinned) },
+                            onDelete = { viewModel.deleteHistory(entry.id) },
+                        )
+                        HorizontalDivider(Modifier.padding(start = 56.dp))
+                    }
+                }
+
+                if (query.isNotBlank()) {
+                    when {
+                        query.trim().length < 2 -> item(key = "query-hint") {
+                            SearchMessage("Type at least 2 characters to search Austin places")
+                        }
+                        placeSearching -> item(key = "place-loading") {
+                            Row(
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Searching offline Austin data…")
+                            }
+                        }
+                        placeError != null -> item(key = "place-error") {
+                            SearchMessage(placeError ?: "Offline Austin search is unavailable", isError = true)
+                        }
+                        visiblePlaceItems.isNotEmpty() -> {
+                            item(key = "places-header") { SearchSectionHeader("Austin places") }
+                            items(
+                                visiblePlaceItems,
+                                key = { result ->
+                                    "place:${result.latitude}:${result.longitude}:${result.name}"
+                                },
+                            ) { result ->
+                                PlaceSearchRow(result = result, onClick = { onPlacePick(result) })
+                                HorizontalDivider(Modifier.padding(start = 56.dp))
+                            }
+                        }
+                        historyItems.isEmpty() -> item(key = "no-results") {
+                            SearchMessage("No matching recent destinations or Austin places")
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun SearchSectionHeader(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+private fun SearchMessage(text: String, isError: Boolean = false) {
+    Text(
+        text = text,
+        modifier = Modifier.fillMaxWidth().padding(24.dp),
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (isError) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
+}
+
+@Composable
+private fun PlaceSearchRow(result: PlaceSearchResult, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Default.Place,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                result.name,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                result.subtitle.ifBlank { result.category },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun coordinateKey(latitude: Double, longitude: Double): String =
+    String.format(Locale.ROOT, "%.5f,%.5f", latitude, longitude)
 
 @Composable
 private fun HistoryRow(
@@ -340,146 +460,6 @@ private fun HistoryRow(
     }
 }
 
-//@Composable
-//fun MapScreen(
-//    viewModel: MapViewModel,
-//    locationController: LocationController,
-//    locationProvider: LocationProvider,
-//) {
-//    var hasPermission by remember { mutableStateOf(locationProvider.hasPermission()) }
-//    val launcher = rememberLauncherForActivityResult(
-//        ActivityResultContracts.RequestMultiplePermissions()
-//    ) { hasPermission = it.values.any { g -> g } }
-//
-//    LaunchedEffect(Unit) {
-//        if (!hasPermission) launcher.launch(
-//            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-//        )
-//    }
-//
-//    Box(Modifier.fillMaxSize()) {
-//        MapHost(viewModel, locationController, locationProvider, hasPermission)
-////        DestinationSearchPanel(
-////            viewModel,
-////            Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(12.dp),
-////        )
-//        BannerHost(
-//            viewModel,
-//            Modifier.align(Alignment.TopCenter).statusBarsPadding()
-//                .padding(start = 12.dp, top = 84.dp, end = 12.dp),
-//        )
-//        NavPanel(viewModel, Modifier.align(Alignment.BottomCenter))
-//    }
-//}
-
-// ════════════════════════════════════════════════════════════════
-// Map
-// ════════════════════════════════════════════════════════════════
-
-//@Composable
-//private fun DestinationSearchPanel(
-//    viewModel: MapViewModel,
-//    modifier: Modifier = Modifier,
-//) {
-//    val query by viewModel.searchQuery.collectAsStateWithLifecycle()
-//    val results by viewModel.searchResults.collectAsStateWithLifecycle()
-//    val searching by viewModel.searching.collectAsStateWithLifecycle()
-//    val error by viewModel.searchError.collectAsStateWithLifecycle()
-//    val focusManager = LocalFocusManager.current
-//    var expanded by rememberSaveable { mutableStateOf(false) }
-//    val showResults = expanded && query.trim().length >= 2
-//
-//    Column(modifier.fillMaxWidth()) {
-//        Surface(
-//            tonalElevation = 6.dp,
-//            shadowElevation = 4.dp,
-//            shape = RoundedCornerShape(18.dp),
-//        ) {
-//            OutlinedTextField(
-//                value = query,
-//                onValueChange = {
-//                    expanded = true
-//                    viewModel.updateSearchQuery(it)
-//                },
-//                modifier = Modifier.fillMaxWidth(),
-//                label = { Text("Destination") },
-//                placeholder = { Text("Address, restaurant, park, or business") },
-//                singleLine = true,
-//                trailingIcon = {
-//                    if (query.isNotBlank()) {
-//                        IconButton(onClick = {
-//                            expanded = false
-//                            viewModel.clearSearch()
-//                        }) {
-//                            Icon(Icons.Default.Close, contentDescription = "Clear destination")
-//                        }
-//                    }
-//                },
-//            )
-//        }
-//
-//        AnimatedVisibility(showResults) {
-//            Surface(
-//                modifier = Modifier.fillMaxWidth().padding(top = 6.dp).heightIn(max = 320.dp),
-//                tonalElevation = 8.dp,
-//                shadowElevation = 6.dp,
-//                shape = RoundedCornerShape(16.dp),
-//            ) {
-//                when {
-//                    searching -> Row(
-//                        Modifier.fillMaxWidth().padding(16.dp),
-//                        verticalAlignment = Alignment.CenterVertically,
-//                    ) {
-//                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-//                        Spacer(Modifier.width(12.dp))
-//                        Text("Searching offline Austin data...")
-//                    }
-//                    error != null -> Text(
-//                        error ?: "Offline Austin search failed",
-//                        modifier = Modifier.padding(16.dp),
-//                        color = MaterialTheme.colorScheme.error,
-//                    )
-//                    results.isEmpty() -> Text(
-//                        "No Austin matches",
-//                        modifier = Modifier.padding(16.dp),
-//                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-//                    )
-//                    else -> LazyColumn {
-//                        itemsIndexed(
-//                            items = results,
-//                            key = { index, result ->
-//                                "${result.name}:${result.latitude}:${result.longitude}:$index"
-//                            },
-//                        ) { _, result ->
-//                            Column(
-//                                Modifier.fillMaxWidth().clickable {
-//                                    expanded = false
-//                                    focusManager.clearFocus()
-//                                    viewModel.selectSearchResult(result)
-//                                }.padding(horizontal = 16.dp, vertical = 12.dp)
-//                            ) {
-//                                Text(
-//                                    result.name,
-//                                    style = MaterialTheme.typography.titleSmall,
-//                                    maxLines = 1,
-//                                    overflow = TextOverflow.Ellipsis,
-//                                )
-//                                Text(
-//                                    result.subtitle,
-//                                    style = MaterialTheme.typography.bodySmall,
-//                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-//                                    maxLines = 1,
-//                                    overflow = TextOverflow.Ellipsis,
-//                                )
-//                            }
-//                            HorizontalDivider()
-//                        }
-//                    }
-//                }
-//            }
-//        }
-//    }
-//}
 
 @Composable
 private fun MapHost(
@@ -622,7 +602,7 @@ private fun MapLibreCanvas(
                 }
                 CameraCommand.ReturnToTracking -> {
                     map.locationComponent.cameraMode =
-                        org.maplibre.android.location.modes.CameraMode.TRACKING_GPS
+                        CameraMode.TRACKING_GPS
                 }
 
                 // camera commands

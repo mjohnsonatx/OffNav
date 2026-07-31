@@ -22,5 +22,6 @@ class AppContainer(context: Context) {
     val locationController = LocationController()
     val locationProvider = LocationProvider(context.applicationContext, appScope)
     val routingEngine = GraphHopperEngine(context.applicationContext)
+    val placeSearchRepository = PlaceSearchRepository(context.applicationContext)
     val navigationEngine = NavigationEngine(locationProvider, routingEngine, appScope)
 }

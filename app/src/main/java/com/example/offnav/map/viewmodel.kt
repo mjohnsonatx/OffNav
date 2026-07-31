@@ -1,5 +1,6 @@
 package com.example.offnav.map
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.offnav.data.RouteHistoryEntry
@@ -12,10 +13,14 @@ import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
 import com.example.offnav.routing.TurnInstruction
+import com.example.offnav.search.PlaceSearchRepository
+import com.example.offnav.search.PlaceSearchResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,6 +36,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -69,6 +75,7 @@ class MapViewModel(
     private val navigationEngine: NavigationEngine,
     private val locationProvider: LocationProvider,
     private val historyRepository: RouteHistoryRepository,
+    private val placeSearchRepository: PlaceSearchRepository,
 ) : ViewModel() {
 
     // ── Map style ──
@@ -106,19 +113,61 @@ class MapViewModel(
     val activeRoute = navigationEngine.activeRoute
     val navState = navigationEngine.navState
 
-    // ── History ──
-    private val _historyQuery = MutableStateFlow("")
-    val historyQuery = _historyQuery.asStateFlow()
+    // ── Unified destination search: Room history + offline Austin place index ──
+    private val _destinationQuery = MutableStateFlow("")
+    val destinationQuery = _destinationQuery.asStateFlow()
 
     @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
     val history: StateFlow<List<RouteHistoryEntry>> =
-        _historyQuery
+        _destinationQuery
             .debounce(180.milliseconds)                       // don't hit the DB on every keystroke
             .distinctUntilChanged()
             .flatMapLatest { historyRepository.observe(it) }   // cancels superseded queries
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    fun onHistoryQueryChange(q: String) { _historyQuery.value = q }
+    private val _placeResults = MutableStateFlow<List<PlaceSearchResult>>(emptyList())
+    val placeResults = _placeResults.asStateFlow()
+    private val _placeSearching = MutableStateFlow(false)
+    val placeSearching = _placeSearching.asStateFlow()
+    private val _placeSearchError = MutableStateFlow<String?>(null)
+    val placeSearchError = _placeSearchError.asStateFlow()
+    private var placeSearchJob: Job? = null
+
+    fun onDestinationQueryChange(query: String) {
+        _destinationQuery.value = query
+        _placeSearchError.value = null
+        _placeResults.value = emptyList()
+        placeSearchJob?.cancel()
+
+        val requestedText = query
+        val requestedQuery = requestedText.trim()
+        if (requestedQuery.length < 2) {
+            _placeSearching.value = false
+            return
+        }
+
+        _placeSearching.value = true
+        placeSearchJob = viewModelScope.launch {
+            delay(180)
+            try {
+                _placeResults.value = withContext(Dispatchers.IO) {
+                    placeSearchRepository.search(requestedQuery)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                Log.e("MapViewModel", "Offline Austin place search failed", failure)
+                _placeResults.value = emptyList()
+                _placeSearchError.value = "Offline Austin search is unavailable"
+            } finally {
+                if (_destinationQuery.value == requestedText) {
+                    _placeSearching.value = false
+                }
+            }
+        }
+    }
+
+    fun clearDestinationQuery() = onDestinationQueryChange("")
 
     fun deleteHistory(id: Long) = viewModelScope.launch { historyRepository.delete(id) }
     fun togglePin(id: Long, pinned: Boolean) = viewModelScope.launch { historyRepository.setPinned(id, pinned) }
@@ -184,6 +233,20 @@ class MapViewModel(
 
     /** Re-route to a saved destination from the current position. */
     fun routeToHistory(entry: RouteHistoryEntry) {
+        clearDestinationQuery()
+        _cameraCommands.trySend(CameraCommand.FlyTo(entry.destination, zoom = 16.5))
+        routeFromCurrent(entry.destination, entry.label, entry.subtitle)
+    }
+
+    /** Resolve a new offline place result through the same route/history pipeline. */
+    fun routeToPlace(result: PlaceSearchResult) {
+        clearDestinationQuery()
+        val target = LatLng(result.latitude, result.longitude)
+        _cameraCommands.trySend(CameraCommand.FlyTo(target, zoom = 16.5))
+        routeFromCurrent(target, result.name, result.subtitle)
+    }
+
+    private fun routeFromCurrent(target: LatLng, label: String, subtitle: String) {
         val fix = locationProvider.lastFix.value
         if (fix == null) {
             _transient.value = "Waiting for a GPS fix…"
@@ -191,9 +254,9 @@ class MapViewModel(
         }
         requestRoute(
             from = LatLng(fix.latitude, fix.longitude),
-            to = entry.destination,
-            label = entry.label,
-            subtitle = entry.subtitle,
+            to = target,
+            label = label,
+            subtitle = subtitle,
         )
     }
 
