@@ -37,7 +37,10 @@ android {
     }
 
     androidResources {
-        noCompress 'mbtiles', 'ghz'
+        // MapLibre reads offline glyph ranges directly from AssetManager. Keeping
+        // PBF files uncompressed avoids the asset-read failures that previously
+        // left symbol layers without text.
+        noCompress 'mbtiles', 'ghz', 'pbf'
     }
 
     packagingOptions {
