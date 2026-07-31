@@ -21,8 +21,10 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -181,6 +183,9 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
     var showSteps by remember { mutableStateOf(false) }
     var showAddStop by remember { mutableStateOf(false) }
     val addStopSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val context = LocalContext.current
+    val pdfExporting by viewModel.pdfExporting.collectAsStateWithLifecycle()
+
 
     Surface(
         shape = MaterialTheme.shapes.large,
@@ -237,7 +242,10 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
 
             // Action buttons
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = viewModel::startNavigation, modifier = Modifier.weight(1f)) {
+                Button(
+                    onClick = { viewModel.startNavigation(context) },
+                    modifier = Modifier.weight(1f)
+                ) {
                     Icon(Icons.Default.Navigation, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text("Start")
@@ -252,9 +260,35 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
                     Spacer(Modifier.width(4.dp))
                     Text("${s.stepCount}")
                 }
-
                 FilledTonalIconButton(onClick = viewModel::clearRoute) {
                     Icon(Icons.Default.Close, contentDescription = "Clear route")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            // Second row: share & export
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { viewModel.shareRoute(context) }) {
+                    Icon(Icons.Default.Share, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share")
+                }
+                OutlinedButton(
+                    onClick = { viewModel.exportDirectionsPdf(context) },
+                    enabled = !pdfExporting,
+                ) {
+                    if (pdfExporting) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.PictureAsPdf, null, Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text("PDF")
+                }
+                OutlinedButton(onClick = { viewModel.shareLocation(context) }) {
+                    Icon(Icons.Default.MyLocation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share Pin")
                 }
             }
         }

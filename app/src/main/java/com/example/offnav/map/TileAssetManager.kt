@@ -3,7 +3,7 @@ package com.example.offnav.map
 import android.content.Context
 import java.io.File
 
-class TileAssetManager(private val context: Context) {
+class TileAssetManager(val context: Context) {
 
     companion object {
         private const val TILE_ASSET = "tiles/region.mbtiles"

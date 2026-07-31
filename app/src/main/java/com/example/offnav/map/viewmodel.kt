@@ -1,5 +1,7 @@
 package com.example.offnav.map
 
+import android.content.Context
+import android.content.Intent
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -7,6 +9,7 @@ import com.example.offnav.data.RouteHistoryEntry
 import com.example.offnav.data.RouteHistoryRepository
 import com.example.offnav.data.formatDuration
 import com.example.offnav.data.formatMeters
+import com.example.offnav.export.DirectionsPdfExporter
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.navigation.TripPlanner
@@ -17,6 +20,8 @@ import com.example.offnav.routing.TurnInstruction
 import com.example.offnav.search.PlaceCategory
 import com.example.offnav.search.PlaceSearchRepository
 import com.example.offnav.search.PlaceSearchResult
+import com.example.offnav.service.NavigationForegroundService
+import com.example.offnav.sharing.LocationSharer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -431,4 +436,66 @@ class MapViewModel(
             }
         }
     }
+
+    private val pdfExporter = DirectionsPdfExporter(context = tileAssetManager.context)
+
+    fun shareLocation(context: Context) {
+        val fix = locationProvider.lastFix.value ?: return
+        LocationSharer.shareCurrentLocation(context, fix)
+    }
+
+    fun shareRoute(context: Context) {
+        val fix = locationProvider.lastFix.value ?: return
+        val summary = routeSummary.value ?: return
+        val dest = destination ?: return
+        LocationSharer.shareRoute(
+            context, fix,
+            summary.destinationLabel,
+            dest.latitude, dest.longitude,
+            summary.distanceText, summary.durationText,
+        )
+    }
+
+    private val _pdfExporting = MutableStateFlow(false)
+    val pdfExporting = _pdfExporting.asStateFlow()
+
+    fun exportDirectionsPdf(context: Context) {
+        val route = _route.value ?: return
+        val label = _destinationLabel.value
+        _pdfExporting.value = true
+        viewModelScope.launch {
+            try {
+                val uri = pdfExporter.export(route, label.label, label.subtitle)
+                // Open share/view chooser
+                withContext(Dispatchers.Main) {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, "application/pdf")
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Directions PDF"))
+                }
+            } catch (e: Exception) {
+                _transient.value = "PDF export failed: ${e.message}"
+            } finally {
+                _pdfExporting.value = false
+            }
+        }
+    }
+
+    // Modify startNavigation to also launch foreground service:
+    fun startNavigation(context: Context) {
+        val route = _route.value ?: return
+        val dest = destination ?: return
+        navigationEngine.start(route, dest)
+        _cameraCommands.trySend(CameraCommand.ReturnToTracking)
+        NavigationForegroundService.start(context)
+    }
+
+    // Modify stopNavigation to also stop the service:
+    fun stopNavigation(context: Context) {
+        navigationEngine.stop()
+        clearRoute()
+        NavigationForegroundService.stop(context)
+    }
+
 }
