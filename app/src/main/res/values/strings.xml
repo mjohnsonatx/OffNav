@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">OffNav</string>
+    <string name="widget_description">Shows live turn-by-turn navigation directions on your home screen.</string>
 </resources>

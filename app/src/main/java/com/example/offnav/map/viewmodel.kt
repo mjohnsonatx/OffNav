@@ -79,6 +79,7 @@ sealed interface CameraCommand {
 
 @OptIn(FlowPreview::class)
 class MapViewModel(
+    private val appContext: Context,
     private val tileAssetManager: TileAssetManager,
     private val routingEngine: GraphHopperEngine,
     private val navigationEngine: NavigationEngine,
@@ -437,7 +438,7 @@ class MapViewModel(
         }
     }
 
-    private val pdfExporter = DirectionsPdfExporter(context = tileAssetManager.context)
+    private val pdfExporter = DirectionsPdfExporter(appContext)
 
     fun shareLocation(context: Context) {
         val fix = locationProvider.lastFix.value ?: return

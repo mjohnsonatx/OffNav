@@ -46,7 +46,7 @@
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
-                android:resource="@layout/nav_widget_info" />
+                android:resource="@xml/nav_widget_info" />
         </receiver>
         <provider
             android:name="androidx.core.content.FileProvider"
