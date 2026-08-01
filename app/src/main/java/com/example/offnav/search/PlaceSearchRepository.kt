@@ -2,6 +2,7 @@ package com.example.offnav.search
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import com.example.offnav.region.RegionSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.maplibre.android.geometry.LatLng
@@ -33,7 +34,10 @@ private data class RankedPlaceSearchResult(
     val sourceRank: Int,
 )
 
-class PlaceSearchRepository(context: Context) {
+class PlaceSearchRepository(
+    context: Context,
+    private val region: RegionSnapshot,
+) {
     companion object {
         private const val SEARCH_ASSET = "search/austin_places.db"
         private const val SEARCH_FILE = "austin_places.db"
@@ -52,9 +56,25 @@ class PlaceSearchRepository(context: Context) {
     @Volatile
     private var database: SQLiteDatabase? = null
 
-    private val dbPath = context.getDatabasePath("austin_places.db").absolutePath
-    private val db: SQLiteDatabase by lazy {
-        SQLiteDatabase.openDatabase(dbPath, null, SQLiteDatabase.OPEN_READONLY)
+    /** `searchNearby` used the old `db` field; route it through the same cached handle. */
+    private val db: SQLiteDatabase get() = openDatabase()
+
+    @Synchronized
+    private fun openDatabase(): SQLiteDatabase {
+        database?.takeIf { it.isOpen }?.let { return it }
+        val file = when (region) {
+            is RegionSnapshot.Installed -> region.searchDb.also {
+                check(it.isFile) { "Active region is missing search.db" }
+            }
+            RegionSnapshot.BuiltIn -> ensureDatabaseOnDisk()
+        }
+        return SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+            .also { opened ->
+                check(opened.version == region.searchSchema) {
+                    "Unsupported search index version: ${opened.version} (expected ${region.searchSchema})"
+                }
+                database = opened
+            }
     }
 
     fun search(query: String, limit: Int = DEFAULT_LIMIT): List<PlaceSearchResult> {
@@ -170,22 +190,6 @@ class PlaceSearchRepository(context: Context) {
                     )
                 }
             }
-        }
-    }
-
-    @Synchronized
-    private fun openDatabase(): SQLiteDatabase {
-        database?.takeIf { it.isOpen }?.let { return it }
-        val file = ensureDatabaseOnDisk()
-        return SQLiteDatabase.openDatabase(
-            file.absolutePath,
-            null,
-            SQLiteDatabase.OPEN_READONLY,
-        ).also { opened ->
-            check(opened.version == 2) {
-                "Unsupported Austin search index version: ${opened.version}"
-            }
-            database = opened
         }
     }
 

@@ -3,6 +3,7 @@ package com.example.offnav.routing
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.example.offnav.region.GraphProfile
 import com.graphhopper.GHRequest
 import com.graphhopper.GraphHopper
 import com.graphhopper.GraphHopperConfig
@@ -37,6 +38,7 @@ import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
+import com.example.offnav.region.RegionSnapshot
 
 data class RouteResult(
     val points: List<LatLng>,
@@ -70,23 +72,27 @@ sealed interface RoutingState {
     data class Failed(val message: String) : RoutingState
 }
 
-class GraphHopperEngine(private val context: Context) {
+class GraphHopperEngine(
+    private val context: Context,
+    private val region: RegionSnapshot,
+) {
 
     companion object {
         private const val TAG = "GraphHopperEngine"
         private const val GRAPH_ASSET = "routing/region.ghz"
-        private const val GRAPH_DIR = "graphhopper"
+        private const val BUILTIN_GRAPH_DIR = "graphhopper"
         private const val GRAPH_PARTIAL_DIR = "graphhopper.partial"
-        private const val GRAPH_VERSION_ENTRY = "offnav.graph.version"
         private const val LEGACY_PBF_FILE = "region.osm.pbf"
         private const val LEGACY_VERSION_FILE = "graph.profile.version"
-        private const val PROFILE = "car"
-        private const val GRAPH_CONFIG_VERSION = 4
+        // delegate to the shared contract so the importer and the engine can never disagree
+        internal const val PROFILE = GraphProfile.PROFILE
+        private const val GRAPH_VERSION_ENTRY = GraphProfile.VERSION_ENTRY
+        private const val ENCODED_VALUES = GraphProfile.ENCODED_VALUES
         private const val COPY_BUFFER_SIZE = 1024 * 1024
         private const val COPY_PROGRESS_STEP = 8L * 1024L * 1024L
-        private const val ENCODED_VALUES =
-            "car_access,road_access,road_class,road_environment,car_average_speed"
     }
+
+    private fun carProfile(): Profile = GraphProfile.carProfile()
 
     private var hopper: GraphHopper? = null
     private val initMutex = Mutex()
@@ -106,22 +112,22 @@ class GraphHopperEngine(private val context: Context) {
     val isReady: Boolean get() = hopper != null
 
     /** The routing profile: a custom model over car encoded values. */
-    private fun carProfile(): Profile = Profile(PROFILE).apply {
-        setCustomModel(
-            CustomModel().apply {
-                addToSpeed(Statement.If("true", Statement.Op.LIMIT, "car_average_speed"))
-                addToPriority(Statement.If("!car_access", Statement.Op.MULTIPLY, "0"))
-                addToPriority(
-                    Statement.ElseIf("road_access == DESTINATION", Statement.Op.MULTIPLY, "0.1")
-                )
-                addToPriority(Statement.If("road_class == TRACK", Statement.Op.MULTIPLY, "0.5"))
-                addToPriority(Statement.If("road_environment == FERRY", Statement.Op.MULTIPLY, "0.5"))
-                distanceInfluence = 70.0
-            }
-        )
-        // Optional: enable to honor turn restrictions (slower import, better routes)
-        // setTurnCostsConfig(TurnCostsConfig.car())
-    }
+//    private fun carProfile(): Profile = Profile(PROFILE).apply {
+//        setCustomModel(
+//            CustomModel().apply {
+//                addToSpeed(Statement.If("true", Statement.Op.LIMIT, "car_average_speed"))
+//                addToPriority(Statement.If("!car_access", Statement.Op.MULTIPLY, "0"))
+//                addToPriority(
+//                    Statement.ElseIf("road_access == DESTINATION", Statement.Op.MULTIPLY, "0.1")
+//                )
+//                addToPriority(Statement.If("road_class == TRACK", Statement.Op.MULTIPLY, "0.5"))
+//                addToPriority(Statement.If("road_environment == FERRY", Statement.Op.MULTIPLY, "0.5"))
+//                distanceInfluence = 70.0
+//            }
+//        )
+//        // Optional: enable to honor turn restrictions (slower import, better routes)
+//        // setTurnCostsConfig(TurnCostsConfig.car())
+//    }
 
     suspend fun initialize() = withContext(initDispatcher) {
         initMutex.withLock {
@@ -129,13 +135,22 @@ class GraphHopperEngine(private val context: Context) {
             var graphHopper: GraphHopper? = null
             try {
                 val profile = carProfile()
-                val graphDir = File(context.filesDir, GRAPH_DIR)
-                val currentVersion =
-                    "$GRAPH_CONFIG_VERSION:${profile.version}:$ENCODED_VALUES"
+                val currentVersion = GraphProfile.expectedVersion()
                 val started = SystemClock.elapsedRealtime()
-
                 deleteLegacyRoutingFiles()
-                ensureGraphInstalled(graphDir, currentVersion)
+                // The active snapshot decides where the graph lives. It is never rewritten.
+                val graphDir = when (region) {
+                    is RegionSnapshot.Installed -> region.graphDir.also {
+                        check(it.isDirectory) { "Active region is missing its routing graph" }
+                        check(GraphProfile.installedVersion(it) == currentVersion) {
+                            "Active region's routing graph is incompatible with this app version"
+                        }
+                    }
+                    RegionSnapshot.BuiltIn -> File(context.filesDir, BUILTIN_GRAPH_DIR).also {
+                        ensureGraphInstalled(it, currentVersion)
+                    }
+                }
+
                 publishLoadStage("Loading memory-mapped routing graph", started)
 
                 val config = GraphHopperConfig().apply {

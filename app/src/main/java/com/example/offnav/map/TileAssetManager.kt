@@ -1,32 +1,40 @@
 package com.example.offnav.map
 
 import android.content.Context
+import com.example.offnav.region.RegionSnapshot
 import java.io.File
 
-class TileAssetManager(val context: Context) {
-
+class TileAssetManager(
+    val context: Context,
+    private val region: RegionSnapshot,
+) {
     companion object {
         private const val TILE_ASSET = "tiles/region.mbtiles"
         private const val TILE_FILE = "region.mbtiles"
         private const val STYLE_ASSET = "style.json"
     }
 
-    /** Copies the bundled mbtiles to internal storage (once) and returns its path. */
-    fun ensureTilesOnDisk(): File {
-        val dest = File(context.filesDir, TILE_FILE)
-        if (!dest.exists()) {
-            context.assets.open(TILE_ASSET).use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+    /** Resolves the mbtiles for the *active* snapshot only. Imported regions are already on disk. */
+    fun ensureTilesOnDisk(): File = when (region) {
+        is RegionSnapshot.Installed -> region.tilesFile.also {
+            check(it.isFile) { "Active region is missing tiles.mbtiles" }
+        }
+        RegionSnapshot.BuiltIn -> File(context.filesDir, TILE_FILE).also { dest ->
+            if (!dest.exists()) {
+                val partial = File(context.filesDir, "$TILE_FILE.partial")
+                try {
+                    context.assets.open(TILE_ASSET).use { input ->
+                        partial.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    check(partial.renameTo(dest)) { "Could not install bundled tiles" }
+                } catch (t: Throwable) { partial.delete(); throw t }
             }
         }
-        return dest
     }
 
-    /** Loads the style JSON and injects the on-device mbtiles path. */
     fun buildStyleJson(): String {
         val tilePath = ensureTilesOnDisk().absolutePath
-        val raw = context.assets.open(STYLE_ASSET)
-            .bufferedReader().use { it.readText() }
+        val raw = context.assets.open(STYLE_ASSET).bufferedReader().use { it.readText() }
         return raw.replace("{MBTILES_PATH}", "mbtiles:///$tilePath")
     }
 }

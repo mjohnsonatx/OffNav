@@ -34,7 +34,13 @@ class MainActivity : ComponentActivity() {
                         ) as T
                 }
             )
-            MapScreen(vm, container.locationController, container.locationProvider)
+            MapScreen(
+                viewModel = vm,
+                locationController = container.locationController,
+                locationProvider = container.locationProvider,
+                regionImportManager = container.regionImportManager,
+                activeRegion = container.region,
+            )
         }
     }
 }

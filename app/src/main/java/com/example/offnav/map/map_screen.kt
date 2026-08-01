@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.AddLocation
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Navigation
@@ -49,6 +50,9 @@ import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
+import com.example.offnav.region.RegionImportManager
+import com.example.offnav.region.RegionImportSheet
+import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.routing.TurnInstruction
 import com.example.offnav.search.NearbySearchSheet
 import com.example.offnav.search.PlaceSearchResult
@@ -84,7 +88,11 @@ fun MapScreen(
     viewModel: MapViewModel,
     locationController: LocationController,
     locationProvider: LocationProvider,
+    regionImportManager: RegionImportManager,
+    activeRegion: RegionSnapshot,
 ) {
+
+    var showRegions by rememberSaveable { mutableStateOf(false) }
     var hasPermission by remember { mutableStateOf(locationProvider.hasPermission()) }
     val launcher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -103,11 +111,23 @@ fun MapScreen(
         MapHost(viewModel, locationController, locationProvider, hasPermission)
 
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
-            TopBar(onSearchClick = { showDestinationSearch = true })
+            TopBar(
+                regionLabel = activeRegion.regionId,
+                onSearchClick = { showDestinationSearch = true },
+                onRegionsClick = { showRegions = true },
+            )
             BannerHost(viewModel, Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
         }
 
         BottomPanel(viewModel, Modifier.align(Alignment.BottomCenter))
+    }
+
+    if (showRegions) {
+        RegionImportSheet(
+            manager = regionImportManager,
+            activeRegion = activeRegion,
+            onDismiss = { showRegions = false },
+        )
     }
 
     if (showDestinationSearch) {
@@ -134,7 +154,7 @@ fun MapScreen(
 }
 
 @Composable
-private fun TopBar(onSearchClick: () -> Unit) {
+private fun TopBar(regionLabel: String, onSearchClick: () -> Unit, onRegionsClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .statusBarsPadding()
@@ -148,16 +168,17 @@ private fun TopBar(onSearchClick: () -> Unit) {
             Modifier.clickable(onClick = onSearchClick).padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.Search, contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.width(12.dp))
             Text(
-                "Search Austin or recent destinations",
+                "Search $regionLabel or recent destinations",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).clickable(onClick = onSearchClick),
             )
-            Icon(Icons.Default.History, contentDescription = "History")
+            IconButton(onClick = onRegionsClick) {
+                Icon(Icons.Default.Layers, contentDescription = "Offline regions")
+            }
         }
     }
 }
