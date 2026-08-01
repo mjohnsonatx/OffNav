@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('dallas-fort-worth', 'san-antonio', 'houston')]
+    [ValidateSet('austin', 'dallas-fort-worth', 'san-antonio', 'houston')]
     [string[]]$Regions = @('dallas-fort-worth', 'san-antonio', 'houston'),
 
     [string]$InputPbf = (Join-Path $PSScriptRoot '..\data\texas-260728.osm.pbf'),
@@ -22,6 +22,11 @@ New-Item -ItemType Directory -Path $outputRootPath -Force | Out-Null
 New-Item -ItemType Directory -Path $workRootPath -Force | Out-Null
 
 $definitions = @{
+    'austin' = [pscustomobject]@{
+        Id = 'austin'; DisplayName = 'Austin'
+        MinLat = 30.0980; MaxLat = 30.5160; MinLon = -97.9380; MaxLon = -97.5610
+        FromLat = 30.2672; FromLon = -97.7431; ToLat = 30.2850; ToLon = -97.7350
+    }
     'dallas-fort-worth' = [pscustomobject]@{
         Id = 'dallas-fort-worth'; DisplayName = 'Dallas-Fort Worth'
         MinLat = 32.25; MaxLat = 33.55; MinLon = -98.05; MaxLon = -96.15

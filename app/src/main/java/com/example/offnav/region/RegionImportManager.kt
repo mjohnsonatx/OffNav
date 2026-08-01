@@ -20,7 +20,7 @@ sealed interface ImportState {
     }
     data object Validating : ImportState
     /** Published only after the pointer flip. The new region is never shown until now. */
-    data class RestartRequired(val regionId: String, val version: String) : ImportState
+    data class RestartRequired(val displayName: String, val version: String) : ImportState
     data class Failed(val message: String) : ImportState
 }
 
@@ -51,7 +51,7 @@ class RegionImportManager(
                     }
                     if (copied == total) _state.value = ImportState.Validating
                 }
-                _state.value = ImportState.RestartRequired(snapshot.regionId, snapshot.version)
+                _state.value = ImportState.RestartRequired(snapshot.displayName, snapshot.version)
             } catch (c: CancellationException) {
                 _state.value = ImportState.Idle
                 throw c

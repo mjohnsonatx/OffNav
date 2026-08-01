@@ -9,23 +9,29 @@ import java.io.File
 sealed interface RegionSnapshot {
     val pointerValue: String
     val regionId: String
+    val displayName: String
     val version: String
     val searchSchema: Int
+    /** Null only for legacy descriptors written before bounds were part of the manifest. */
+    val bounds: RegionBounds?
 
-    /** The region that ships inside the APK. Materialised lazily from assets, exactly as before. */
     data object BuiltIn : RegionSnapshot {
         override val pointerValue = "builtin"
         override val regionId = "austin"
+        override val displayName = "Austin"
         override val version = "bundled"
         override val searchSchema = 2
+        // Coverage of the APK-bundled extract — adjust to match your actual build.
+        override val bounds = RegionBounds(30.05, 30.52, -98.05, -97.53)
     }
 
-    /** A region imported from a `.offnav` bundle and published under `filesDir/regions/<installId>`. */
     class Installed(
         val installId: String,
         override val regionId: String,
+        override val displayName: String,
         override val version: String,
         override val searchSchema: Int,
+        override val bounds: RegionBounds?,
         val dir: File,
     ) : RegionSnapshot {
         override val pointerValue: String get() = installId

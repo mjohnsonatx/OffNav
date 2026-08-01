@@ -19,6 +19,8 @@ object BundleSpec {
     val REGION_VERSION = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")   // becomes part of a dir name
     val SHA256_HEX = Regex("[0-9a-f]{64}")
     val DECIMAL = Regex("[0-9]{1,19}")                              // no '+', '-', ',', '_', spaces
+    /** Invariant-culture decimal: optional '-', digits, optional '.'+digits. No exponent, no ','. */
+    val DECIMAL_SIGNED = Regex("-?[0-9]{1,3}(\\.[0-9]{1,15})?")
 }
 
 /** Every rejection path funnels through this so the UI always has a user-readable reason. */

@@ -112,7 +112,7 @@ fun MapScreen(
 
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             TopBar(
-                regionLabel = activeRegion.regionId,
+                regionLabel = activeRegion.displayName,
                 onSearchClick = { showDestinationSearch = true },
                 onRegionsClick = { showRegions = true },
             )

@@ -13,6 +13,7 @@ import com.example.offnav.export.DirectionsPdfExporter
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.navigation.TripPlanner
+import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
@@ -86,6 +87,7 @@ class MapViewModel(
     private val locationProvider: LocationProvider,
     private val historyRepository: RouteHistoryRepository,
     private val placeSearchRepository: PlaceSearchRepository,
+    private val region: RegionSnapshot
 ) : ViewModel() {
 
     // ── Map style ──
@@ -304,6 +306,13 @@ class MapViewModel(
             _transient.value = "Routing engine still preparing — please wait"
             return
         }
+
+        val bounds = region.bounds
+        if (bounds != null && !bounds.contains(to.latitude, to.longitude)) {
+            _transient.value = "That destination is outside ${region.displayName}"
+            return
+        }
+
         destination = to
         _destinationLabel.value = PlaceLabelUi(label, subtitle)
         // Set destination in the planner (clears previous waypoints)

@@ -29,3 +29,19 @@ tasks.register('extractSearchData', JavaExec) {
     mainClass = 'com.example.offnav.tools.AustinSearchExtractor'
     jvmArgs '-Xms512m', '-Xmx8g', '-Dfile.encoding=UTF-8'
 }
+
+tasks.register('extractRegionPbf', JavaExec) {
+    group = 'application'
+    description = 'Extracts a bounded routing/search OSM PBF from the local state snapshot.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.offnav.tools.RegionalPbfExtractor'
+    jvmArgs '-Xms1g', '-Xmx12g', '-Dfile.encoding=UTF-8'
+}
+
+tasks.register('extractTexasOutline', JavaExec) {
+    group = 'application'
+    description = 'Builds a simplified Texas boundary GeoJSON from the local OSM PBF.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.example.offnav.tools.TexasOutlineExtractor'
+    jvmArgs '-Xms512m', '-Xmx4g', '-Dfile.encoding=UTF-8'
+}

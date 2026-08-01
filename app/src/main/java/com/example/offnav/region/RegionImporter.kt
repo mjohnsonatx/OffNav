@@ -76,9 +76,15 @@ class RegionImporter(
             // ── flip the cold-start pointer (also atomic) ──
             store.publishPointer(installId)
 
-            Log.i(TAG, "Imported region ${manifest.regionId}@${manifest.version} as $installId")
+            Log.i(TAG, "Imported ${manifest.displayName} (${manifest.regionId}@${manifest.version}) as $installId")
             return RegionSnapshot.Installed(
-                installId, manifest.regionId, manifest.version, manifest.searchSchema, target
+                installId = installId,
+                regionId = manifest.regionId,
+                displayName = manifest.displayName,
+                version = manifest.version,
+                searchSchema = manifest.searchSchema,
+                bounds = manifest.bounds,
+                dir = target,
             )
         } catch (c: CancellationException) {
             cleanup(staging, published)

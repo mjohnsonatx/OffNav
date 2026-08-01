@@ -3,10 +3,23 @@ package com.example.offnav.region
 /** Declared size + digest for one payload member. The zip's own size field is never trusted. */
 data class PayloadSpec(val bytes: Long, val sha256: String)
 
+/** WGS84 bounding box of a region's coverage. */
+data class RegionBounds(
+    val minLatitude: Double,
+    val maxLatitude: Double,
+    val minLongitude: Double,
+    val maxLongitude: Double,
+) {
+    fun contains(lat: Double, lon: Double): Boolean =
+        lat in minLatitude..maxLatitude && lon in minLongitude..maxLongitude
+}
+
 data class RegionManifest(
     val regionId: String,
+    val displayName: String,
     val version: String,
     val searchSchema: Int,
+    val bounds: RegionBounds,
     val tiles: PayloadSpec,
     val routing: PayloadSpec,
     val search: PayloadSpec,
@@ -18,8 +31,13 @@ object ManifestParser {
 
     private const val K_FORMAT = "format"
     private const val K_ID = "id"
+    private const val K_DISPLAY_NAME = "displayName"
     private const val K_VERSION = "version"
     private const val K_SCHEMA = "searchSchema"
+    private const val K_MIN_LAT = "minLatitude"
+    private const val K_MAX_LAT = "maxLatitude"
+    private const val K_MIN_LON = "minLongitude"
+    private const val K_MAX_LON = "maxLongitude"
     private const val K_TILES_B = "tiles.bytes"
     private const val K_TILES_H = "tiles.sha256"
     private const val K_ROUTE_B = "routing.bytes"
@@ -27,10 +45,14 @@ object ManifestParser {
     private const val K_SEARCH_B = "search.bytes"
     private const val K_SEARCH_H = "search.sha256"
 
+    /** Exhaustive and closed: anything not listed here is rejected, anything missing is rejected. */
     private val REQUIRED = listOf(
-        K_FORMAT, K_ID, K_VERSION, K_SCHEMA,
+        K_FORMAT, K_ID, K_DISPLAY_NAME, K_VERSION, K_SCHEMA,
+        K_MIN_LAT, K_MAX_LAT, K_MIN_LON, K_MAX_LON,
         K_TILES_B, K_TILES_H, K_ROUTE_B, K_ROUTE_H, K_SEARCH_B, K_SEARCH_H,
     )
+
+    private const val MAX_DISPLAY_NAME = 128
 
     fun parse(raw: ByteArray): RegionManifest {
         if (raw.isEmpty()) importFailure("Bundle manifest is empty")
@@ -65,15 +87,26 @@ object ManifestParser {
         val id = values.getValue(K_ID)
         if (!BundleSpec.REGION_ID.matches(id)) importFailure("Invalid region id \"$id\"")
 
+        val displayName = values.getValue(K_DISPLAY_NAME)
+        if (displayName.isEmpty() || displayName.length > MAX_DISPLAY_NAME) {
+            importFailure("\"$K_DISPLAY_NAME\" must be 1-$MAX_DISPLAY_NAME characters")
+        }
+        if (displayName.any { it.code < 0x20 || it.code == 0x7F }) {
+            importFailure("\"$K_DISPLAY_NAME\" contains control characters")
+        }
+
         val version = values.getValue(K_VERSION)
         if (!BundleSpec.REGION_VERSION.matches(version)) importFailure("Invalid region version \"$version\"")
 
         val schema = positiveInt(values.getValue(K_SCHEMA), K_SCHEMA)
+        val bounds = bounds(values)
 
         val manifest = RegionManifest(
             regionId = id,
+            displayName = displayName,
             version = version,
             searchSchema = schema,
+            bounds = bounds,
             tiles = payload(values, K_TILES_B, K_TILES_H),
             routing = payload(values, K_ROUTE_B, K_ROUTE_H),
             search = payload(values, K_SEARCH_B, K_SEARCH_H),
@@ -84,6 +117,28 @@ object ManifestParser {
             importFailure("Bundle declares more than 4 GB of content")
         }
         return manifest
+    }
+
+    private fun bounds(v: Map<String, String>): RegionBounds {
+        val minLat = coordinate(v.getValue(K_MIN_LAT), K_MIN_LAT, 90.0)
+        val maxLat = coordinate(v.getValue(K_MAX_LAT), K_MAX_LAT, 90.0)
+        val minLon = coordinate(v.getValue(K_MIN_LON), K_MIN_LON, 180.0)
+        val maxLon = coordinate(v.getValue(K_MAX_LON), K_MAX_LON, 180.0)
+        if (minLat >= maxLat) importFailure("\"$K_MIN_LAT\" must be less than \"$K_MAX_LAT\"")
+        if (minLon >= maxLon) importFailure("\"$K_MIN_LON\" must be less than \"$K_MAX_LON\"")
+        return RegionBounds(minLat, maxLat, minLon, maxLon)
+    }
+
+    private fun coordinate(value: String, key: String, limit: Double): Double {
+        // Invariant-culture decimal only: no ',', no '+', no exponent, no NaN/Infinity.
+        if (!BundleSpec.DECIMAL_SIGNED.matches(value)) {
+            importFailure("\"$key\" must be a plain decimal number")
+        }
+        val parsed = value.toDoubleOrNull() ?: importFailure("\"$key\" is not a valid number")
+        if (!parsed.isFinite() || parsed < -limit || parsed > limit) {
+            importFailure("\"$key\" is outside the valid range")
+        }
+        return parsed
     }
 
     private fun payload(v: Map<String, String>, byteKey: String, hashKey: String): PayloadSpec {

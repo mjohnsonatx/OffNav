@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
                             container.locationProvider,
                             container.historyRepository,
                             container.placeSearchRepository,
+                            container.region
                         ) as T
                 }
             )

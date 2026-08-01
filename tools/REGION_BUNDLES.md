@@ -8,6 +8,7 @@ not download dependencies or require Tilemaker to rebuild Texas.
 
 | Region ID | Bounds (west, south, east, north) | Route verification |
 | --- | --- | --- |
+| `austin` | `-97.938,30.098,-97.561,30.516` | Downtown Austin to the University of Texas area |
 | `dallas-fort-worth` | `-98.05,32.25,-96.15,33.55` | Dallas to Fort Worth |
 | `san-antonio` | `-99.15,28.95,-97.55,30.25` | Downtown to north-central San Antonio |
 | `houston` | `-96.10,28.85,-94.45,30.55` | Downtown Houston to Sugar Land |
@@ -18,7 +19,7 @@ From the repository root:
 
 ```powershell
 .\tools\build-metro-regions.ps1 `
-    -Regions dallas-fort-worth,san-antonio,houston `
+    -Regions austin,dallas-fort-worth,san-antonio,houston `
     -WorkRoot 'D:\OffNav-region-work'
 ```
 

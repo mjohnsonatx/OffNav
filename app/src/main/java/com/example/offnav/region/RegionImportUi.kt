@@ -50,7 +50,7 @@ fun RegionImportSheet(
             Text("Offline regions", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(4.dp))
             Text(
-                "Active: ${activeRegion.regionId} · ${activeRegion.version}",
+                "Active: ${activeRegion.displayName} · ${activeRegion.version}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -79,7 +79,7 @@ fun RegionImportSheet(
                 }
 
                 is ImportState.RestartRequired -> {
-                    Text("${s.regionId} ${s.version} is ready.", style = MaterialTheme.typography.titleMedium)
+                    Text("${s.displayName} (${s.version}) is ready.", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(4.dp))
                     Text(
                         "OffNav must restart to switch regions. The current region stays active until then.",

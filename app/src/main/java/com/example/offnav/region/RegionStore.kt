@@ -81,13 +81,17 @@ class RegionStore(context: Context) {
     }
 
     // ── descriptors ──────────────────────────────────────────────────────
-
     fun writeDescriptor(dir: File, manifest: RegionManifest) {
         val json = JSONObject()
             .put("format", 1)
             .put("id", manifest.regionId)
+            .put("displayName", manifest.displayName)
             .put("version", manifest.version)
             .put("searchSchema", manifest.searchSchema)
+            .put("minLatitude", manifest.bounds.minLatitude)
+            .put("maxLatitude", manifest.bounds.maxLatitude)
+            .put("minLongitude", manifest.bounds.minLongitude)
+            .put("maxLongitude", manifest.bounds.maxLongitude)
             .toString()
         val file = File(dir, DESCRIPTOR)
         FileOutputStream(file).use { it.write(json.toByteArray()); it.flush(); it.fd.sync() }
@@ -99,15 +103,28 @@ class RegionStore(context: Context) {
         val descriptor = File(dir, DESCRIPTOR).takeIf { it.isFile } ?: return null
         return runCatching {
             val json = JSONObject(descriptor.readText())
+            val id = json.getString("id")
+            // Descriptors written by an older build have no displayName/bounds: degrade, don't discard.
+            val bounds = if (json.has("minLatitude")) {
+                RegionBounds(
+                    json.getDouble("minLatitude"),
+                    json.getDouble("maxLatitude"),
+                    json.getDouble("minLongitude"),
+                    json.getDouble("maxLongitude"),
+                )
+            } else null
             RegionSnapshot.Installed(
                 installId = installId,
-                regionId = json.getString("id"),
+                regionId = id,
+                displayName = json.optString("displayName", "").ifBlank { id },
                 version = json.getString("version"),
                 searchSchema = json.getInt("searchSchema"),
+                bounds = bounds,
                 dir = dir,
             ).takeIf { it.isIntact() }
         }.getOrNull()
     }
+
 
     // ── garbage collection (cold start only; nothing is open yet) ────────
 
