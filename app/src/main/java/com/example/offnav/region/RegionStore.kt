@@ -97,53 +97,78 @@ class RegionStore(context: Context) {
         FileOutputStream(file).use { it.write(json.toByteArray()); it.flush(); it.fd.sync() }
     }
 
-    fun readSnapshot(installId: String): RegionSnapshot.Installed? {
-        if (!isValidPointer(installId) || installId == RegionSnapshot.BuiltIn.pointerValue) return null
-        val dir = installDir(installId)
-        val descriptor = File(dir, DESCRIPTOR).takeIf { it.isFile } ?: return null
-        return runCatching {
-            val json = JSONObject(descriptor.readText())
-            val id = json.getString("id")
-            // Descriptors written by an older build have no displayName/bounds: degrade, don't discard.
-            val bounds = if (json.has("minLatitude")) {
-                RegionBounds(
-                    json.getDouble("minLatitude"),
-                    json.getDouble("maxLatitude"),
-                    json.getDouble("minLongitude"),
-                    json.getDouble("maxLongitude"),
-                )
-            } else null
-            RegionSnapshot.Installed(
-                installId = installId,
-                regionId = id,
-                displayName = json.optString("displayName", "").ifBlank { id },
-                version = json.getString("version"),
-                searchSchema = json.getInt("searchSchema"),
-                bounds = bounds,
-                dir = dir,
-            ).takeIf { it.isIntact() }
-        }.getOrNull()
+    // ── descriptors ──────────────────────────────────────────────────────
+
+    fun writeDescriptor(dir: File, descriptor: RegionDescriptor) {
+        FileOutputStream(File(dir, DESCRIPTOR)).use {
+            it.write(descriptor.toByteArray())
+            it.flush()
+            it.fd.sync()
+        }
     }
 
+    private fun RegionDescriptor.toByteArray() = toJson().toByteArray(Charsets.UTF_8)
 
-    // ── garbage collection (cold start only; nothing is open yet) ────────
+    fun readDescriptor(installId: String): RegionDescriptor? {
+        if (!isValidPointer(installId) || installId == RegionSnapshot.BuiltIn.pointerValue) return null
+        val file = File(installDir(installId), DESCRIPTOR).takeIf { it.isFile } ?: return null
+        return runCatching { file.readText() }.getOrNull()?.let(RegionDescriptor::parse)
+    }
 
-    fun gc(active: RegionSnapshot) {
+    fun readSnapshot(installId: String): RegionSnapshot.Installed? {
+        val descriptor = readDescriptor(installId) ?: return null
+        return RegionSnapshot.Installed(
+            installId = installId,
+            regionId = descriptor.regionId,
+            displayName = descriptor.displayName,
+            version = descriptor.version,
+            searchSchema = descriptor.searchSchema,
+            bounds = descriptor.bounds,
+            installedBytes = descriptor.installedBytes,
+            dir = installDir(installId),
+        ).takeIf { it.isIntact() }
+    }
+
+    /** Every install directory that currently parses as a real region. */
+    fun listInstallIds(): List<String> =
+        root.listFiles()
+            ?.filter { it.isDirectory && it.name != STAGING }
+            ?.map { it.name }
+            ?.filter { readSnapshot(it) != null }
+            ?.sorted()
+            .orEmpty()
+
+    // ── retention ────────────────────────────────────────────────────────
+
+    /**
+     * Cold-start sweep. Installed regions are NEVER removed here — they stay on the device
+     * until the user deletes them. We only reap staging leftovers from a killed import and
+     * directories that do not parse as a region (a torn publish, or hand-placed junk).
+     */
+    fun pruneOrphans() {
         clearStaging()
         root.listFiles()?.forEach { child ->
             val name = child.name
             if (name == STAGING || name == POINTER || name == "$POINTER.tmp") return@forEach
-            if (active is RegionSnapshot.Installed && name == active.installId) return@forEach
-            Log.i(TAG, "GC superseded region $name")
-            child.deleteRecursively()
+            if (!child.isDirectory || readSnapshot(name) == null) {
+                Log.w(TAG, "Removing orphaned region directory $name")
+                child.deleteRecursively()
+            }
         }
-        // Once an imported region is active, the APK-seeded copies are dead weight.
-        if (active is RegionSnapshot.Installed) {
-            File(filesDir, "graphhopper").deleteRecursively()
-            File(filesDir, "graphhopper.partial").deleteRecursively()
-            File(filesDir, "region.mbtiles").delete()
-            File(filesDir, "austin_places.db").delete()
-        }
+    }
+
+    /**
+     * User-initiated removal. Callers must have already refused the active snapshot and the
+     * pending pointer target — this is the last line of defence, not the first.
+     */
+    fun deleteInstall(installId: String, activePointer: String, activeSnapshotId: String) {
+        require(installId != RegionSnapshot.BuiltIn.pointerValue) { "The bundled region cannot be deleted" }
+        require(installId != activePointer) { "Cannot delete the region selected for next launch" }
+        require(installId != activeSnapshotId) { "Cannot delete the region currently in use" }
+        val dir = installDir(installId)
+        check(dir.canonicalPath.startsWith(root.canonicalPath + File.separator)) { "Refusing to delete $dir" }
+        check(dir.deleteRecursively()) { "Could not delete region" }
+        fsyncDir(root)
     }
 
     companion object {

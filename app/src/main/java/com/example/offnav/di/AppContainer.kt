@@ -8,6 +8,7 @@ import com.example.offnav.location.LocationProvider
 import com.example.offnav.map.TileAssetManager
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.region.RegionBootstrap
+import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
 import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.region.RegionStore
@@ -28,6 +29,9 @@ class AppContainer(context: Context) {
      */
     val region: RegionSnapshot = RegionBootstrap(regionStore).resolve()
 
+    val regionCatalog = RegionCatalog(context.applicationContext, regionStore, region, appScope)
+    val regionImportManager = RegionImportManager(context.applicationContext, regionStore, appScope)
+
     private val database = OffNavDatabase.build(context)
     val historyRepository = RouteHistoryRepository(database.routeHistoryDao())
 
@@ -37,6 +41,4 @@ class AppContainer(context: Context) {
     val routingEngine = GraphHopperEngine(context.applicationContext, region)
     val placeSearchRepository = PlaceSearchRepository(context.applicationContext, region)
     val navigationEngine = NavigationEngine(locationProvider, routingEngine, appScope)
-
-    val regionImportManager = RegionImportManager(context.applicationContext, regionStore, appScope)
 }

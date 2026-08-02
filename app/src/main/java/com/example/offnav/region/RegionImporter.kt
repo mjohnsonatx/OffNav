@@ -65,7 +65,12 @@ class RegionImporter(
             RegionStore.fsyncDir(File(staging, "routing"))
             RegionStore.fsyncDir(staging)
 
-            // ── publish: one rename(2) on the same filesystem ──
+            // ── measure what we actually wrote, before the rename ──
+            val installedBytes = safeDiskUsage(staging)
+            store.writeDescriptor(staging, RegionDescriptor.of(manifest, installedBytes))
+            RegionStore.fsyncDir(File(staging, "routing"))
+            RegionStore.fsyncDir(staging)
+
             val installId = store.newInstallId(manifest.regionId, manifest.version)
             val target = store.installDir(installId)
             if (target.exists()) target.deleteRecursively()
@@ -84,6 +89,7 @@ class RegionImporter(
                 version = manifest.version,
                 searchSchema = manifest.searchSchema,
                 bounds = manifest.bounds,
+                installedBytes = installedBytes,
                 dir = target,
             )
         } catch (c: CancellationException) {
@@ -204,10 +210,9 @@ class RegionImporter(
 
     private fun requireFreeSpace(manifest: RegionManifest) {
         val stat = StatFs(store.filesDir.absolutePath)
-        // payload + the extracted graph (routing.ghz is expanded beside itself) + slack
-        val needed = manifest.declaredPayloadBytes + manifest.routing.bytes * 3 + 64L * 1024 * 1024
+        val needed = manifest.declaredPayloadBytes + manifest.routing.bytes * 3 + 128L * 1024 * 1024
         if (stat.availableBytes < needed) {
-            importFailure("Not enough free storage to import this region")
+            importFailure("Not enough free storage to import ${manifest.displayName}")
         }
     }
 

@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
                 locationProvider = container.locationProvider,
                 regionImportManager = container.regionImportManager,
                 activeRegion = container.region,
+                regionCatalog = container.regionCatalog
             )
         }
     }

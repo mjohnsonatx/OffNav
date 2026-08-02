@@ -13,6 +13,8 @@ import com.example.offnav.export.DirectionsPdfExporter
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.navigation.TripPlanner
+import com.example.offnav.region.RegionCatalog
+import com.example.offnav.region.RegionOutline
 import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
@@ -50,9 +52,10 @@ import org.maplibre.android.geometry.LatLng
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import java.util.PrimitiveIterator
 import kotlin.time.Duration.Companion.milliseconds
 
-class StyleHolder(val json: String)
+class StyleHolder(val json: String, val outlineGeoJson: String?)
 
 sealed interface MapUiState {
     data object Loading : MapUiState
@@ -87,7 +90,7 @@ class MapViewModel(
     private val locationProvider: LocationProvider,
     private val historyRepository: RouteHistoryRepository,
     private val placeSearchRepository: PlaceSearchRepository,
-    private val region: RegionSnapshot
+    private val region: RegionSnapshot,
 ) : ViewModel() {
 
     // ── Map style ──
@@ -227,7 +230,12 @@ class MapViewModel(
     init {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.value = try {
-                MapUiState.Ready(StyleHolder(tileAssetManager.buildStyleJson()))
+                MapUiState.Ready(
+                    StyleHolder(
+                        json = tileAssetManager.buildStyleJson(),
+                        outlineGeoJson = RegionOutline.load(appContext),   // null-safe: map still loads
+                    )
+                )
             } catch (e: Exception) {
                 MapUiState.Error(e.message ?: "Failed to load map data")
             }

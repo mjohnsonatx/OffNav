@@ -50,8 +50,9 @@ import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
+import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
-import com.example.offnav.region.RegionImportSheet
+import com.example.offnav.region.RegionOutline
 import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.routing.TurnInstruction
 import com.example.offnav.search.NearbySearchSheet
@@ -67,12 +68,15 @@ import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapLibreMapOptions
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.FeatureCollection
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
+import com.example.offnav.region.RegionsSheet
 
 private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
@@ -90,6 +94,7 @@ fun MapScreen(
     locationProvider: LocationProvider,
     regionImportManager: RegionImportManager,
     activeRegion: RegionSnapshot,
+    regionCatalog: RegionCatalog
 ) {
 
     var showRegions by rememberSaveable { mutableStateOf(false) }
@@ -123,9 +128,9 @@ fun MapScreen(
     }
 
     if (showRegions) {
-        RegionImportSheet(
+        RegionsSheet(
             manager = regionImportManager,
-            activeRegion = activeRegion,
+            catalog = regionCatalog,
             onDismiss = { showRegions = false },
         )
     }
@@ -652,6 +657,27 @@ private fun MapLibreCanvas(
         mapView.getMapAsync { map ->
             mapRef = map
             map.setStyle(Style.Builder().fromJson(style.json)) { ready ->
+                // ── state outline, beneath everything the basemap draws ──
+                style.outlineGeoJson?.let { outlineJson ->
+                    ready.addSource(
+                        GeoJsonSource(RegionOutline.SOURCE_ID, FeatureCollection.fromJson(outlineJson))
+                    )
+                    val fill = FillLayer(RegionOutline.FILL_LAYER_ID, RegionOutline.SOURCE_ID)
+                        .withProperties(
+                            fillColor("#e8e4dc"),
+                            fillOpacity(1f),
+                        )
+                    val border = LineLayer(RegionOutline.LINE_LAYER_ID, RegionOutline.SOURCE_ID)
+                        .withProperties(
+                            lineColor("#b9b2a5"),
+                            lineWidth(1f),
+                            lineJoin("round"),
+                        )
+                    ready.addLayerAtBase(fill)
+                    ready.addLayerAbove(border, RegionOutline.FILL_LAYER_ID)
+                }
+
+                // ── route overlay, on top as before ──
                 ready.addSource(GeoJsonSource(ROUTE_SOURCE))
                 ready.addLayer(
                     LineLayer(ROUTE_LAYER, ROUTE_SOURCE).withProperties(
