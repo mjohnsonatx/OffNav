@@ -22,12 +22,13 @@ data class RegionInfo(
     val installedBytes: Long?,
     /** Currently loaded by MapLibre / GraphHopper / SQLite in this process. */
     val isActive: Boolean,
-    /** Selected by the cold-start pointer but not yet loaded — needs a restart. */
-    val isPendingActivation: Boolean,
+    /** Selected by the cold-start pointer, whether or not it is already active. */
+    val isSelectedForNextLaunch: Boolean,
 ) {
+    val isPendingActivation: Boolean get() = isSelectedForNextLaunch && !isActive
     val isBuiltIn: Boolean get() = installId == RegionSnapshot.BuiltIn.pointerValue
-    val canDelete: Boolean get() = !isBuiltIn && !isActive && !isPendingActivation
-    val canActivate: Boolean get() = !isActive && !isPendingActivation
+    val canDelete: Boolean get() = !isBuiltIn && !isActive && !isSelectedForNextLaunch
+    val canActivate: Boolean get() = !isSelectedForNextLaunch
 }
 
 /**
@@ -74,7 +75,7 @@ class RegionCatalog(
                 bounds = b.bounds,
                 installedBytes = builtInBytes(),
                 isActive = activeId == b.pointerValue,
-                isPendingActivation = pointer == b.pointerValue && activeId != b.pointerValue,
+                isSelectedForNextLaunch = pointer == b.pointerValue,
             )
         }
 
@@ -89,7 +90,7 @@ class RegionCatalog(
                 // descriptor value is authoritative; fall back to a bounded, symlink-safe walk
                 installedBytes = d.installedBytes ?: safeDiskUsage(store.installDir(id)),
                 isActive = activeId == id,
-                isPendingActivation = pointer == id && activeId != id,
+                isSelectedForNextLaunch = pointer == id,
             )
         }
 

@@ -10,7 +10,7 @@ import org.maplibre.geojson.MultiPolygon
 import org.maplibre.geojson.Polygon
 
 /**
- * Loads `assets/geo/texas_outline.geojson` and normalises it to a FeatureCollection of
+ * Loads `assets/texas_outline.geojson` and normalises it to a FeatureCollection of
  * Polygon/MultiPolygon only. EPSG:4326 (lon, lat) is assumed — GeoJSON mandates it, and
  * MapLibre assumes it, so we only sanity-check the ordinate ranges.
  *
@@ -18,7 +18,7 @@ import org.maplibre.geojson.Polygon
  */
 object RegionOutline {
 
-    const val ASSET = "geo/texas_outline.geojson"
+    const val ASSET = "texas_outline.geojson"
     const val SOURCE_ID = "region-outline-source"
     const val FILL_LAYER_ID = "region-outline-fill"
     const val LINE_LAYER_ID = "region-outline-line"

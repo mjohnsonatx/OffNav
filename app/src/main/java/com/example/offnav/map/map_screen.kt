@@ -53,6 +53,7 @@ import com.example.offnav.navigation.NavState
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
 import com.example.offnav.region.RegionOutline
+import com.example.offnav.region.RegionOverview
 import com.example.offnav.region.RegionSnapshot
 import com.example.offnav.routing.TurnInstruction
 import com.example.offnav.search.NearbySearchSheet
@@ -111,9 +112,19 @@ fun MapScreen(
 
     var showDestinationSearch by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val installedRegions by regionCatalog.regions.collectAsStateWithLifecycle()
+    val regionOverviewGeoJson = remember(installedRegions) {
+        RegionOverview.toGeoJson(installedRegions)
+    }
 
     Box(Modifier.fillMaxSize()) {
-        MapHost(viewModel, locationController, locationProvider, hasPermission)
+        MapHost(
+            viewModel = viewModel,
+            locationController = locationController,
+            locationProvider = locationProvider,
+            hasPermission = hasPermission,
+            regionOverviewGeoJson = regionOverviewGeoJson,
+        )
 
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             TopBar(
@@ -592,6 +603,7 @@ private fun MapHost(
     locationController: LocationController,
     locationProvider: LocationProvider,
     hasPermission: Boolean,
+    regionOverviewGeoJson: String,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     when (val s = state) {
@@ -604,6 +616,7 @@ private fun MapHost(
             locationProvider = locationProvider,
             activeRoute = viewModel.activeRoute,
             viewModel = viewModel,
+            regionOverviewGeoJson = regionOverviewGeoJson,
             onLongPress = { from, to, label, subtitle -> viewModel.requestRoute(from, to, label, subtitle) }
         )
     }
@@ -617,7 +630,7 @@ private fun MapLibreCanvas(
     locationProvider: LocationProvider,
     activeRoute: StateFlow<ActiveRoute?>,
     viewModel: MapViewModel,
-    // signature change
+    regionOverviewGeoJson: String,
     onLongPress: (from: LatLng, to: LatLng, label: String, subtitle: String) -> Unit,
 ) {
     val context = LocalContext.current
@@ -677,6 +690,28 @@ private fun MapLibreCanvas(
                     ready.addLayerAbove(border, RegionOutline.FILL_LAYER_ID)
                 }
 
+                // Installed coverage is metadata-only. No inactive MBTiles, SQLite database,
+                // or GraphHopper graph is opened in this process.
+                ready.addSource(
+                    GeoJsonSource(
+                        RegionOverview.SOURCE_ID,
+                        FeatureCollection.fromJson(regionOverviewGeoJson),
+                    )
+                )
+                ready.addLayer(
+                    FillLayer(RegionOverview.FILL_LAYER_ID, RegionOverview.SOURCE_ID)
+                        .withProperties(fillColor("#16a34a"), fillOpacity(0.16f))
+                )
+                ready.addLayer(
+                    LineLayer(RegionOverview.LINE_LAYER_ID, RegionOverview.SOURCE_ID)
+                        .withProperties(
+                            lineColor("#15803d"),
+                            lineWidth(2f),
+                            lineOpacity(0.9f),
+                            lineJoin("round"),
+                        )
+                )
+
                 // ── route overlay, on top as before ──
                 ready.addSource(GeoJsonSource(ROUTE_SOURCE))
                 ready.addLayer(
@@ -701,6 +736,13 @@ private fun MapLibreCanvas(
                 hasInitialCamera = true
             }
         }
+    }
+
+    // Catalog scans and imports can change the lightweight coverage overlay at runtime.
+    LaunchedEffect(styleRef, regionOverviewGeoJson) {
+        styleRef
+            ?.getSourceAs<GeoJsonSource>(RegionOverview.SOURCE_ID)
+            ?.setGeoJson(regionOverviewGeoJson)
     }
 
     // Location puck

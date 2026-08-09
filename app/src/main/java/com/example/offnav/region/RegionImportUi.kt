@@ -52,6 +52,7 @@ fun RegionsSheet(
     val regions by catalog.regions.collectAsStateWithLifecycle()
     val pending by catalog.pendingActivation.collectAsStateWithLifecycle()
     var error by remember { mutableStateOf<String?>(null) }
+    var pendingDelete by remember { mutableStateOf<RegionInfo?>(null) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(manager::import)
@@ -135,10 +136,7 @@ fun RegionsSheet(
                             }
                         },
                         onDelete = {
-                            error = null
-                            catalog.delete(region.installId) { r ->
-                                error = r.exceptionOrNull()?.message
-                            }
+                            pendingDelete = region
                         },
                     )
                     HorizontalDivider()
@@ -146,6 +144,30 @@ fun RegionsSheet(
             }
             Spacer(Modifier.height(12.dp))
         }
+    }
+
+    pendingDelete?.let { region ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete ${region.displayName}?") },
+            text = {
+                Text("This removes its offline map, routing, and search data from this device.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingDelete = null
+                        error = null
+                        catalog.delete(region.installId) { result ->
+                            error = result.exceptionOrNull()?.message
+                        }
+                    }
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel") }
+            },
+        )
     }
 }
 
