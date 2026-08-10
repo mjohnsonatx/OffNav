@@ -1,6 +1,7 @@
 package com.example.offnav.map
 
 import android.Manifest
+import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -44,12 +45,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.offnav.data.ActivityType
 import com.example.offnav.data.RouteHistoryEntry
 import com.example.offnav.location.LocationController
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
+import com.example.offnav.recording.RecordViewModel
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
 import com.example.offnav.region.RegionOutline
@@ -83,6 +86,9 @@ private const val ROUTE_SOURCE = "route-source"
 private const val ROUTE_LAYER = "route-layer"
 private const val INITIAL_LOCATION_ZOOM = 15.0
 private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
+private const val TRACK_SOURCE = "track-source"
+private const val TRACK_LAYER  = "track-layer"
+
 
 // ════════════════════════════════════════════════════════════════
 // Root
@@ -91,6 +97,7 @@ private const val EMPTY_FC = """{"type":"FeatureCollection","features":[]}"""
 @Composable
 fun MapScreen(
     viewModel: MapViewModel,
+    recordVm: RecordViewModel,
     locationController: LocationController,
     locationProvider: LocationProvider,
     regionImportManager: RegionImportManager,
@@ -117,9 +124,28 @@ fun MapScreen(
         RegionOverview.toGeoJson(installedRegions)
     }
 
+    val context = LocalContext.current
+
+    val dangling by recordVm.dangling.collectAsStateWithLifecycle()
+    dangling?.let { row ->
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("Unfinished activity") },
+            text = { Text("A ${ActivityType.fromName(row.type).displayName.lowercase()} was still recording when the app closed.") },
+            confirmButton = { TextButton(onClick = { recordVm.resumeDangling(context) }) { Text("Resume") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = recordVm::saveDangling) { Text("Save") }
+                    TextButton(onClick = recordVm::discardDangling) { Text("Discard") }
+                }
+            },
+        )
+    }
+
     Box(Modifier.fillMaxSize()) {
         MapHost(
             viewModel = viewModel,
+            recordVm = recordVm,
             locationController = locationController,
             locationProvider = locationProvider,
             hasPermission = hasPermission,
@@ -600,6 +626,7 @@ private fun HistoryRow(
 @Composable
 private fun MapHost(
     viewModel: MapViewModel,
+    recordVm: RecordViewModel,
     locationController: LocationController,
     locationProvider: LocationProvider,
     hasPermission: Boolean,
@@ -616,6 +643,7 @@ private fun MapHost(
             locationProvider = locationProvider,
             activeRoute = viewModel.activeRoute,
             viewModel = viewModel,
+            recordViewModel = recordVm,
             regionOverviewGeoJson = regionOverviewGeoJson,
             onLongPress = { from, to, label, subtitle -> viewModel.requestRoute(from, to, label, subtitle) }
         )
@@ -630,6 +658,7 @@ private fun MapLibreCanvas(
     locationProvider: LocationProvider,
     activeRoute: StateFlow<ActiveRoute?>,
     viewModel: MapViewModel,
+    recordViewModel: RecordViewModel,
     regionOverviewGeoJson: String,
     onLongPress: (from: LatLng, to: LatLng, label: String, subtitle: String) -> Unit,
 ) {
@@ -719,6 +748,14 @@ private fun MapLibreCanvas(
                         lineColor("#3b82f6"), lineWidth(6f), lineCap("round"), lineJoin("round")
                     )
                 )
+
+                ready.addSource(GeoJsonSource(TRACK_SOURCE))
+                ready.addLayer(
+                    LineLayer(TRACK_LAYER, TRACK_SOURCE).withProperties(
+                        lineColor("#fc4c02"), lineWidth(5f), lineCap("round"), lineJoin("round")
+                    )
+                )
+
                 styleRef = ready
             }
             map.uiSettings.isRotateGesturesEnabled = true
@@ -736,6 +773,12 @@ private fun MapLibreCanvas(
                 hasInitialCamera = true
             }
         }
+    }
+
+    LaunchedEffect(styleRef) {
+        val s = styleRef ?: return@LaunchedEffect
+        val src = s.getSourceAs<GeoJsonSource>(TRACK_SOURCE) ?: return@LaunchedEffect
+        recordViewModel.liveTrackGeoJson.collect { src.setGeoJson(it) }
     }
 
     // Catalog scans and imports can change the lightweight coverage overlay at runtime.

@@ -1,12 +1,16 @@
 package com.example.offnav.di
 
 import android.content.Context
+import com.example.offnav.data.ActivityRepository
 import com.example.offnav.data.OffNavDatabase
 import com.example.offnav.data.RouteHistoryRepository
+import com.example.offnav.export.ActivityCardRenderer
+import com.example.offnav.export.GpxExporter
 import com.example.offnav.location.LocationController
 import com.example.offnav.location.LocationProvider
 import com.example.offnav.map.TileAssetManager
 import com.example.offnav.navigation.NavigationEngine
+import com.example.offnav.recording.ActivityRecorder
 import com.example.offnav.region.RegionBootstrap
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
@@ -32,13 +36,24 @@ class AppContainer(context: Context) {
     val regionCatalog = RegionCatalog(context.applicationContext, regionStore, region, appScope)
     val regionImportManager = RegionImportManager(context.applicationContext, regionStore, appScope)
 
-    private val database = OffNavDatabase.build(context)
-    val historyRepository = RouteHistoryRepository(database.routeHistoryDao())
-
     val tileAssetManager = TileAssetManager(context.applicationContext, region)
     val locationController = LocationController()
     val locationProvider = LocationProvider(context.applicationContext, appScope)
     val routingEngine = GraphHopperEngine(context.applicationContext, region)
     val placeSearchRepository = PlaceSearchRepository(context.applicationContext, region)
     val navigationEngine = NavigationEngine(locationProvider, routingEngine, appScope)
+
+    private val database = OffNavDatabase.build(context)
+    val historyRepository = RouteHistoryRepository(database.routeHistoryDao())
+    // ── Activity recording ──
+    private val activityDao = database.activityDao()
+    val activityRepository = ActivityRepository(activityDao)
+    val activityRecorder = ActivityRecorder(
+        appContext = context.applicationContext,
+        locationProvider = locationProvider,   // declared above this line already
+        dao = activityDao,
+        scope = appScope,
+    )
+    val gpxExporter = GpxExporter(context.applicationContext, activityDao)
+    val activityCardRenderer = ActivityCardRenderer(context.applicationContext, tileAssetManager)
 }

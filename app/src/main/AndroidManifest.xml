@@ -37,6 +37,10 @@
         </activity>
 
         <service
+            android:name=".service.RecordingForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
+        <service
             android:name=".service.NavigationForegroundService"
             android:exported="false"
             android:foregroundServiceType="location" />
