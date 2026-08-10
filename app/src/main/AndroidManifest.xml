@@ -9,6 +9,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <uses-feature android:name="android.hardware.sensor.barometer" android:required="false" />
+
+
     <application
         android:name=".App"
         android:allowBackup="true"
