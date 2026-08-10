@@ -50,7 +50,7 @@ class AppContainer(context: Context) {
     val activityRepository = ActivityRepository(activityDao)
     val activityRecorder = ActivityRecorder(
         appContext = context.applicationContext,
-        locationProvider = locationProvider,   // declared above this line already
+        locationProvider = locationProvider,
         dao = activityDao,
         scope = appScope,
     )
