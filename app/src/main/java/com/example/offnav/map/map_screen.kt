@@ -53,6 +53,7 @@ import com.example.offnav.navigation.ActiveRoute
 import com.example.offnav.navigation.NavBanner
 import com.example.offnav.navigation.NavState
 import com.example.offnav.recording.RecordViewModel
+import com.example.offnav.recording.RecordingPanel
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
 import com.example.offnav.region.RegionOutline
@@ -161,7 +162,7 @@ fun MapScreen(
             BannerHost(viewModel, Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
         }
 
-        BottomPanel(viewModel, Modifier.align(Alignment.BottomCenter))
+        BottomPanel(viewModel, recordVm, Modifier.align(Alignment.BottomCenter))
     }
 
     if (showRegions) {
@@ -226,14 +227,22 @@ private fun TopBar(regionLabel: String, onSearchClick: () -> Unit, onRegionsClic
 }
 
 @Composable
-private fun BottomPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
+private fun BottomPanel(
+    viewModel: MapViewModel,
+    recordViewModel: RecordViewModel,
+    modifier: Modifier = Modifier,
+) {
     val nav by viewModel.navState.collectAsStateWithLifecycle()
 
-    Box(modifier.navigationBarsPadding().padding(12.dp)) {
+    Column(
+        modifier.fillMaxWidth().navigationBarsPadding().padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         when (nav) {
             NavState.Idle -> RoutePreviewCard(viewModel)
             else -> NavPanel(viewModel)      // your existing composable
         }
+        RecordingPanel(recordViewModel)
     }
 }
 

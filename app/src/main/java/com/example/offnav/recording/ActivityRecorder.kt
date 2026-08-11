@@ -75,9 +75,9 @@ class ActivityRecorder(
     private var sessionJob: Job? = null
 
     // ── Session state. Only ever touched from inside [runSession]'s single coroutine. ──
-    private lateinit var metrics: MetricsAccumulator
-    private lateinit var elevation: ElevationTracker
     private var type: ActivityType = ActivityType.OTHER
+    private var metrics = MetricsAccumulator(type)
+    private var elevation = ElevationTracker(barometer.isAvailable)
     private var segment = 0
     private var activeMillisBase = 0L        // accumulated across completed segments
     private var segmentStartRealtime = 0L
@@ -399,12 +399,20 @@ class ActivityRecorder(
     }
 
     private fun reset() {
-        _statusFlow.value = RecordingStatus.IDLE
+        type = ActivityType.OTHER
+        metrics = MetricsAccumulator(type)
+        elevation = ElevationTracker(barometer.isAvailable)
+        segment = 0
+        activeMillisBase = 0L
+        segmentStartRealtime = 0L
+        lastAccuracy = null
+        lastSpeed = 0.0
+        pendingWrites = mutableListOf()
+        trackSegments = mutableListOf()
         _activityId.value = null
         _liveTrack.value = emptyList()
         _stats.value = LiveStats()
-        pendingWrites = mutableListOf()
-        trackSegments = mutableListOf()
+        _statusFlow.value = RecordingStatus.IDLE
     }
 
     private fun defaultTitle(type: ActivityType, startedAt: Long): String {
