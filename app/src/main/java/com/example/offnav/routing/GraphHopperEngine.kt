@@ -38,6 +38,7 @@ import java.io.InputStream
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.zip.ZipInputStream
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.region.RegionSnapshot
 
 data class RouteResult(
@@ -74,7 +75,7 @@ sealed interface RoutingState {
 
 class GraphHopperEngine(
     private val context: Context,
-    private val region: RegionSnapshot,
+    private val regions: RegionSelection,
 ) {
 
     companion object {
@@ -94,7 +95,7 @@ class GraphHopperEngine(
 
     private fun carProfile(): Profile = GraphProfile.carProfile()
 
-    private var hopper: GraphHopper? = null
+    private val hoppers = linkedMapOf<String, GraphHopper>()
     private val initMutex = Mutex()
 
     private val _state = MutableStateFlow<RoutingState>(RoutingState.NotReady)
@@ -109,7 +110,18 @@ class GraphHopperEngine(
         Thread(r, "gh-route").apply { priority = Thread.NORM_PRIORITY - 1 }
     }.asCoroutineDispatcher()
 
-    val isReady: Boolean get() = hopper != null
+    val isReady: Boolean get() = hoppers.size == regions.snapshots.size
+
+    /** The smallest loaded bundle whose bounds contain the complete trip. */
+    fun coveringRegion(points: List<LatLng>): RegionSnapshot? = regions.snapshots
+        .filter { snapshot ->
+            val bounds = snapshot.bounds ?: return@filter false
+            points.all { point -> bounds.contains(point.latitude, point.longitude) }
+        }
+        .minByOrNull { snapshot ->
+            snapshot.bounds?.let { (it.maxLatitude - it.minLatitude) * (it.maxLongitude - it.minLongitude) }
+                ?: Double.MAX_VALUE
+        }
 
     /** The routing profile: a custom model over car encoded values. */
 //    private fun carProfile(): Profile = Profile(PROFILE).apply {
@@ -131,48 +143,56 @@ class GraphHopperEngine(
 
     suspend fun initialize() = withContext(initDispatcher) {
         initMutex.withLock {
-            if (hopper != null) return@withLock
-            var graphHopper: GraphHopper? = null
+            if (isReady) return@withLock
+            val loaded = linkedMapOf<String, GraphHopper>()
             try {
-                val profile = carProfile()
                 val currentVersion = GraphProfile.expectedVersion()
                 val started = SystemClock.elapsedRealtime()
                 deleteLegacyRoutingFiles()
-                // The active snapshot decides where the graph lives. It is never rewritten.
-                val graphDir = when (region) {
-                    is RegionSnapshot.Installed -> region.graphDir.also {
-                        check(it.isDirectory) { "Active region is missing its routing graph" }
-                        check(GraphProfile.installedVersion(it) == currentVersion) {
-                            "Active region's routing graph is incompatible with this app version"
+
+                regions.snapshots.forEachIndexed { index, region ->
+                    val profile = carProfile()
+                    val graphDir = when (region) {
+                        is RegionSnapshot.Installed -> region.graphDir.also {
+                            check(it.isDirectory) { "${region.displayName} is missing its routing graph" }
+                            check(GraphProfile.installedVersion(it) == currentVersion) {
+                                "${region.displayName}'s routing graph is incompatible with this app version"
+                            }
+                        }
+                        RegionSnapshot.BuiltIn -> File(context.filesDir, BUILTIN_GRAPH_DIR).also {
+                            ensureGraphInstalled(it, currentVersion)
                         }
                     }
-                    RegionSnapshot.BuiltIn -> File(context.filesDir, BUILTIN_GRAPH_DIR).also {
-                        ensureGraphInstalled(it, currentVersion)
+
+                    publishLoadStage(
+                        "Loading ${region.displayName} routing graph (${index + 1}/${regions.snapshots.size})",
+                        started,
+                    )
+
+                    val config = GraphHopperConfig().apply {
+                        putObject("graph.location", graphDir.absolutePath)
+                        putObject("graph.dataaccess.default_type", "MMAP")
+                        putObject("graph.encoded_values", ENCODED_VALUES)
+                        putObject("prepare.min_network_size", 200)
+                        putObject("import.osm.ignored_highways", "")
+                        setProfiles(listOf(profile))
+                        setCHProfiles(listOf(CHProfile(PROFILE)))
                     }
+                    val gh = AndroidGraphHopper { stage ->
+                        publishLoadStage("${region.displayName}: $stage", started)
+                    }.apply {
+                        init(config)
+                        setAllowWrites(false)
+                    }
+                    loaded[region.pointerValue] = gh
+                    loadWithTimer(gh, started)
                 }
-
-                publishLoadStage("Loading memory-mapped routing graph", started)
-
-                val config = GraphHopperConfig().apply {
-                    putObject("graph.location", graphDir.absolutePath)
-                    putObject("graph.dataaccess.default_type", "MMAP")
-                    putObject("graph.encoded_values", ENCODED_VALUES)
-                    putObject("prepare.min_network_size", 200)
-                    putObject("import.osm.ignored_highways", "")
-                    setProfiles(listOf(profile))
-                    setCHProfiles(listOf(CHProfile(PROFILE)))
-                }
-                val gh = AndroidGraphHopper { stage -> publishLoadStage(stage, started) }.apply {
-                    init(config)
-                    setAllowWrites(false)
-                }
-                graphHopper = gh
-                loadWithTimer(gh, started)
-                hopper = gh
+                hoppers.putAll(loaded)
                 _state.value = RoutingState.Ready
-                Log.i(TAG, "Graph ready in ${elapsedSeconds(started)}s")
+                Log.i(TAG, "${hoppers.size} routing graphs ready in ${elapsedSeconds(started)}s")
             } catch (t: Throwable) {
-                runCatching { graphHopper?.close() }
+                loaded.values.forEach { graphHopper -> runCatching { graphHopper.close() } }
+                hoppers.clear()
                 Log.e(TAG, "Graph init failed", t)
                 _state.value = RoutingState.Failed("${t::class.simpleName}: ${t.message ?: "unknown"}")
             }
@@ -185,11 +205,17 @@ class GraphHopperEngine(
     /** Supports multi-stop: points are visited in order. */
     suspend fun route(points: List<LatLng>): Result<RouteResult> =
         withContext(routeDispatcher) {
-            val gh = hopper
-                ?: return@withContext Result.failure(IllegalStateException("Engine not ready"))
             if (points.size < 2) {
                 return@withContext Result.failure(IllegalArgumentException("Need >= 2 points"))
             }
+            val region = coveringRegion(points)
+                ?: return@withContext Result.failure(
+                    IllegalArgumentException("No loaded region covers the complete route")
+                )
+            val gh = hoppers[region.pointerValue]
+                ?: return@withContext Result.failure(
+                    IllegalStateException("${region.displayName} routing is not ready")
+                )
 
             val request = GHRequest(
                 points.map { com.graphhopper.util.shapes.GHPoint(it.latitude, it.longitude) }
@@ -223,8 +249,8 @@ class GraphHopperEngine(
         }
 
     fun close() {
-        hopper?.close()
-        hopper = null
+        hoppers.values.forEach { it.close() }
+        hoppers.clear()
         _state.value = RoutingState.NotReady
     }
 

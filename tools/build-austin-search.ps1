@@ -4,10 +4,10 @@ param(
     [string]$WorkRoot = (Join-Path $PSScriptRoot '..\build\search-index'),
     [ValidatePattern('^[a-z0-9][a-z0-9_-]{0,63}$')]
     [string]$RegionId = 'austin',
-    [double]$MinLatitude = 30.0980,
-    [double]$MaxLatitude = 30.5160,
-    [double]$MinLongitude = -97.9380,
-    [double]$MaxLongitude = -97.5610
+    [double]$MinLatitude = 28.9500,
+    [double]$MaxLatitude = 30.5200,
+    [double]$MinLongitude = -99.1500,
+    [double]$MaxLongitude = -97.5300
 )
 
 $ErrorActionPreference = 'Stop'

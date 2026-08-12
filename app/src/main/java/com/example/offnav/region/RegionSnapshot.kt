@@ -2,10 +2,7 @@ package com.example.offnav.region
 
 import java.io.File
 
-/**
- * The single immutable region identity chosen once at cold start by [com.example.offnav.di.AppContainer]
- * and handed to the tile, routing and search components. Nothing mutates it for the life of the process.
- */
+/** One immutable region resource set selected at cold start. */
 sealed interface RegionSnapshot {
     val pointerValue: String
     val regionId: String
@@ -41,4 +38,29 @@ sealed interface RegionSnapshot {
         val searchDb: File get() = File(dir, "search.db")
         fun isIntact(): Boolean = tilesFile.isFile && graphDir.isDirectory && searchDb.isFile
     }
+}
+
+/**
+ * The complete, immutable set of regions loaded by MapLibre, GraphHopper and search for this
+ * process. Changes are staged on disk and become visible together after a cold restart.
+ */
+data class RegionSelection(val snapshots: List<RegionSnapshot>) {
+    init {
+        require(snapshots.isNotEmpty()) { "At least one offline region must be loaded" }
+        require(snapshots.map { it.pointerValue }.distinct().size == snapshots.size) {
+            "Duplicate region install in selection"
+        }
+        require(snapshots.map { it.regionId }.distinct().size == snapshots.size) {
+            "Only one installed version of each region can be loaded"
+        }
+    }
+
+    val pointerValues: Set<String> = snapshots.mapTo(linkedSetOf()) { it.pointerValue }
+    val displayName: String = when (snapshots.size) {
+        1 -> snapshots.single().displayName
+        else -> "${snapshots.size} offline regions"
+    }
+
+    fun contains(latitude: Double, longitude: Double): Boolean =
+        snapshots.any { it.bounds?.contains(latitude, longitude) == true }
 }

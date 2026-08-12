@@ -78,8 +78,11 @@ class RegionImporter(
             published = target
             RegionStore.fsyncDir(store.root)
 
-            // ── flip the cold-start pointer (also atomic) ──
-            store.publishPointer(installId)
+            // Replace any older version of this logical region while preserving other metros.
+            val nextSelection = store.readSelection()
+                .filterNot { pointer -> store.regionIdFor(pointer) == manifest.regionId }
+                .plus(installId)
+            store.publishSelection(nextSelection)
 
             Log.i(TAG, "Imported ${manifest.displayName} (${manifest.regionId}@${manifest.version}) as $installId")
             return RegionSnapshot.Installed(

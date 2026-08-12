@@ -25,10 +25,10 @@ data class RegionInfo(
     /** Selected by the cold-start pointer, whether or not it is already active. */
     val isSelectedForNextLaunch: Boolean,
 ) {
-    val isPendingActivation: Boolean get() = isSelectedForNextLaunch && !isActive
+    val isPendingActivation: Boolean get() = isSelectedForNextLaunch != isActive
+    val isPendingRemoval: Boolean get() = isActive && !isSelectedForNextLaunch
     val isBuiltIn: Boolean get() = installId == RegionSnapshot.BuiltIn.pointerValue
     val canDelete: Boolean get() = !isBuiltIn && !isActive && !isSelectedForNextLaunch
-    val canActivate: Boolean get() = !isSelectedForNextLaunch
 }
 
 /**
@@ -38,7 +38,7 @@ data class RegionInfo(
 class RegionCatalog(
     context: Context,
     private val store: RegionStore,
-    private val active: RegionSnapshot,
+    private val active: RegionSelection,
     private val scope: CoroutineScope,
 ) {
     private val filesDir = context.applicationContext.filesDir
@@ -47,8 +47,8 @@ class RegionCatalog(
     val regions: StateFlow<List<RegionInfo>> = _regions.asStateFlow()
 
     /** True when a restart will change which region is loaded. */
-    val pendingActivation: StateFlow<RegionInfo?> get() = _pending.asStateFlow()
-    private val _pending = MutableStateFlow<RegionInfo?>(null)
+    val pendingActivation: StateFlow<Boolean> get() = _pending.asStateFlow()
+    private val _pending = MutableStateFlow(false)
 
     init { refresh() }
 
@@ -58,13 +58,13 @@ class RegionCatalog(
                 Log.e(TAG, "Region scan failed", it); emptyList()
             }
             _regions.value = list
-            _pending.value = list.firstOrNull { it.isPendingActivation }
+            _pending.value = list.any { it.isPendingActivation }
         }
     }
 
     private fun scan(): List<RegionInfo> {
-        val pointer = store.readPointer()
-        val activeId = active.pointerValue
+        val selectedIds = store.readSelection().toSet()
+        val activeIds = active.pointerValues
 
         val builtIn = RegionSnapshot.BuiltIn.let { b ->
             RegionInfo(
@@ -74,8 +74,8 @@ class RegionCatalog(
                 version = b.version,
                 bounds = b.bounds,
                 installedBytes = builtInBytes(),
-                isActive = activeId == b.pointerValue,
-                isSelectedForNextLaunch = pointer == b.pointerValue,
+                isActive = b.pointerValue in activeIds,
+                isSelectedForNextLaunch = b.pointerValue in selectedIds,
             )
         }
 
@@ -89,8 +89,8 @@ class RegionCatalog(
                 bounds = d.bounds,
                 // descriptor value is authoritative; fall back to a bounded, symlink-safe walk
                 installedBytes = d.installedBytes ?: safeDiskUsage(store.installDir(id)),
-                isActive = activeId == id,
-                isSelectedForNextLaunch = pointer == id,
+                isActive = id in activeIds,
+                isSelectedForNextLaunch = id in selectedIds,
             )
         }
 
@@ -116,14 +116,22 @@ class RegionCatalog(
 
     // ── mutations: pointer only; nothing on disk is touched ──────────────
 
-    /** Select [installId] for the next cold start. The live region keeps running untouched. */
-    fun activate(installId: String, onResult: (Result<Unit>) -> Unit = {}) {
+    /** Adds or removes [installId] from the next cold start as one atomic selection change. */
+    fun setSelected(installId: String, selected: Boolean, onResult: (Result<Unit>) -> Unit = {}) {
         scope.launch(Dispatchers.IO) {
             val result = runCatching {
-                if (installId != RegionSnapshot.BuiltIn.pointerValue) {
-                    checkNotNull(store.readSnapshot(installId)) { "That region is no longer installed" }
+                val targetRegionId = checkNotNull(store.regionIdFor(installId)) {
+                    "That region is no longer installed"
                 }
-                store.publishPointer(installId)
+                val next = store.readSelection().toMutableList()
+                if (selected) {
+                    next.removeAll { pointer -> store.regionIdFor(pointer) == targetRegionId }
+                    next += installId
+                } else {
+                    next.remove(installId)
+                    check(next.isNotEmpty()) { "At least one offline region must remain loaded" }
+                }
+                store.publishSelection(next)
             }
             refresh()
             withContext(Dispatchers.Main) { onResult(result) }
@@ -135,8 +143,8 @@ class RegionCatalog(
             val result = runCatching {
                 store.deleteInstall(
                     installId = installId,
-                    activePointer = store.readPointer(),
-                    activeSnapshotId = active.pointerValue,
+                    selectedPointers = store.readSelection().toSet(),
+                    activeSnapshotIds = active.pointerValues,
                 )
             }
             refresh()

@@ -23,6 +23,8 @@ class RegionStore(context: Context) {
     private val stagingRoot = File(root, STAGING)
     private val pointerFile = File(root, POINTER)
     private val pointerTmp = File(root, "$POINTER.tmp")
+    private val selectionFile = File(root, SELECTION)
+    private val selectionTmp = File(root, "$SELECTION.tmp")
 
     private val random = SecureRandom()
 
@@ -52,6 +54,40 @@ class RegionStore(context: Context) {
         if (!pointerTmp.renameTo(pointerFile)) {
             pointerTmp.delete()
             throw RegionImportException("Could not record the active region")
+        }
+        fsyncDir(root)
+    }
+
+    /** Reads the multi-region cold-start selection, migrating the old single pointer lazily. */
+    fun readSelection(): List<String> {
+        val selected = runCatching { selectionFile.takeIf { it.isFile }?.readLines() }
+            .getOrNull()
+            .orEmpty()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .filter(::isValidPointer)
+            .distinct()
+        return selected.ifEmpty { listOf(readPointer()) }
+    }
+
+    /** Atomic newline-delimited selection. Values are install IDs, never paths. */
+    fun publishSelection(values: Collection<String>) {
+        val selected = values.distinct()
+        require(selected.isNotEmpty()) { "At least one offline region must remain selected" }
+        require(selected.all(::isValidPointer)) { "Illegal region selection" }
+        ensureDirs()
+        FileOutputStream(selectionTmp).use { out ->
+            out.write((selected.joinToString("\n") + "\n").toByteArray(Charsets.US_ASCII))
+            out.flush()
+            out.fd.sync()
+        }
+        val published = runCatching {
+            Os.rename(selectionTmp.absolutePath, selectionFile.absolutePath)
+            true
+        }.getOrDefault(false)
+        if (!published) {
+            selectionTmp.delete()
+            throw RegionImportException("Could not record the loaded regions")
         }
         fsyncDir(root)
     }
@@ -129,6 +165,11 @@ class RegionStore(context: Context) {
         ).takeIf { it.isIntact() }
     }
 
+    fun regionIdFor(pointer: String): String? = when (pointer) {
+        RegionSnapshot.BuiltIn.pointerValue -> RegionSnapshot.BuiltIn.regionId
+        else -> readDescriptor(pointer)?.regionId
+    }
+
     /** Every install directory that currently parses as a real region. */
     fun listInstallIds(): List<String> =
         root.listFiles()
@@ -149,7 +190,7 @@ class RegionStore(context: Context) {
         clearStaging()
         root.listFiles()?.forEach { child ->
             val name = child.name
-            if (name == STAGING || name == POINTER || name == "$POINTER.tmp") return@forEach
+            if (name in setOf(STAGING, POINTER, "$POINTER.tmp", SELECTION, "$SELECTION.tmp")) return@forEach
             if (!child.isDirectory || readSnapshot(name) == null) {
                 Log.w(TAG, "Removing orphaned region directory $name")
                 child.deleteRecursively()
@@ -157,14 +198,32 @@ class RegionStore(context: Context) {
         }
     }
 
+
+    /** Once a replacement is active, remove older installs of that same logical region. */
+    fun pruneSuperseded(active: RegionSelection) {
+        val installedRegionIds = active.snapshots
+            .filterIsInstance<RegionSnapshot.Installed>()
+            .mapTo(hashSetOf()) { it.regionId }
+        if (installedRegionIds.isEmpty()) return
+        listInstallIds().forEach { installId ->
+            if (installId in active.pointerValues) return@forEach
+            val snapshot = readSnapshot(installId) ?: return@forEach
+            if (snapshot.regionId in installedRegionIds) {
+                Log.i(TAG, "Removing superseded ${snapshot.regionId} install $installId")
+                installDir(installId).deleteRecursively()
+            }
+        }
+        fsyncDir(root)
+    }
+
     /**
      * User-initiated removal. Callers must have already refused the active snapshot and the
      * pending pointer target — this is the last line of defence, not the first.
      */
-    fun deleteInstall(installId: String, activePointer: String, activeSnapshotId: String) {
+    fun deleteInstall(installId: String, selectedPointers: Set<String>, activeSnapshotIds: Set<String>) {
         require(installId != RegionSnapshot.BuiltIn.pointerValue) { "The bundled region cannot be deleted" }
-        require(installId != activePointer) { "Cannot delete the region selected for next launch" }
-        require(installId != activeSnapshotId) { "Cannot delete the region currently in use" }
+        require(installId !in selectedPointers) { "Cannot delete a region selected for next launch" }
+        require(installId !in activeSnapshotIds) { "Cannot delete a region currently in use" }
         val dir = installDir(installId)
         check(dir.canonicalPath.startsWith(root.canonicalPath + File.separator)) { "Refusing to delete $dir" }
         check(dir.deleteRecursively()) { "Could not delete region" }
@@ -175,6 +234,7 @@ class RegionStore(context: Context) {
         private const val TAG = "RegionStore"
         private const val STAGING = "staging"
         private const val POINTER = "active.pointer"
+        private const val SELECTION = "active.regions"
         const val DESCRIPTOR = "region.json"
 
         private val POINTER_RE = Regex("[A-Za-z0-9_][A-Za-z0-9._-]{0,127}")

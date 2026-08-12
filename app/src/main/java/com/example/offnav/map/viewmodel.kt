@@ -15,7 +15,7 @@ import com.example.offnav.navigation.NavigationEngine
 import com.example.offnav.navigation.TripPlanner
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionOutline
-import com.example.offnav.region.RegionSnapshot
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.routing.RouteResult
 import com.example.offnav.routing.RoutingState
@@ -90,7 +90,7 @@ class MapViewModel(
     private val locationProvider: LocationProvider,
     private val historyRepository: RouteHistoryRepository,
     private val placeSearchRepository: PlaceSearchRepository,
-    private val region: RegionSnapshot,
+    private val regions: RegionSelection,
 ) : ViewModel() {
 
     // ── Map style ──
@@ -188,9 +188,9 @@ class MapViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Throwable) {
-                Log.e("MapViewModel", "Offline Austin place search failed", failure)
+                Log.e("MapViewModel", "Offline place search failed", failure)
                 _placeResults.value = emptyList()
-                _placeSearchError.value = "Offline Austin search is unavailable"
+                _placeSearchError.value = "Offline region search is unavailable"
             } finally {
                 if (_destinationQuery.value == requestedText) {
                     _placeSearching.value = false
@@ -315,9 +315,8 @@ class MapViewModel(
             return
         }
 
-        val bounds = region.bounds
-        if (bounds != null && !bounds.contains(to.latitude, to.longitude)) {
-            _transient.value = "That destination is outside ${region.displayName}"
+        if (routingEngine.coveringRegion(listOf(from, to)) == null) {
+            _transient.value = "No loaded region covers that complete route"
             return
         }
 

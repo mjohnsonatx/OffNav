@@ -1,7 +1,12 @@
 param(
     [string]$InputPbf,
     [string]$WorkRoot = 'D:\OffNav-graphhopper-work',
-    [string]$OutputAsset
+    [string]$OutputAsset,
+    [string]$VerifyLabel = 'Austin',
+    [double]$VerifyFromLatitude = 30.2672,
+    [double]$VerifyFromLongitude = -97.7431,
+    [double]$VerifyToLatitude = 30.2850,
+    [double]$VerifyToLongitude = -97.7350
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +33,16 @@ $runName = 'run-{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss')
 $runPath = Join-Path $resolvedWorkRoot $runName
 
 New-Item -ItemType Directory -Path $resolvedWorkRoot -Force | Out-Null
-$builderArgs = '--input "{0}" --work "{1}" --output "{2}"' -f $resolvedInput,$runPath,$resolvedOutput
+$invariant = [Globalization.CultureInfo]::InvariantCulture
+$builderArgs = '--input "{0}" --work "{1}" --output "{2}" --verify-label "{3}" --verify-from-lat {4} --verify-from-lon {5} --verify-to-lat {6} --verify-to-lon {7}' -f `
+    $resolvedInput,
+    $runPath,
+    $resolvedOutput,
+    $VerifyLabel,
+    $VerifyFromLatitude.ToString($invariant),
+    $VerifyFromLongitude.ToString($invariant),
+    $VerifyToLatitude.ToString($invariant),
+    $VerifyToLongitude.ToString($invariant)
 
 Write-Host "Building GraphHopper graph in $runPath"
 & $gradlew -p $builderRoot run --args=$builderArgs

@@ -14,7 +14,7 @@ import com.example.offnav.recording.ActivityRecorder
 import com.example.offnav.region.RegionBootstrap
 import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
-import com.example.offnav.region.RegionSnapshot
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.region.RegionStore
 import com.example.offnav.routing.GraphHopperEngine
 import com.example.offnav.search.PlaceSearchRepository
@@ -27,20 +27,17 @@ class AppContainer(context: Context) {
 
     private val regionStore = RegionStore(context)
 
-    /**
-     * ONE immutable region identity, resolved once from the cold-start pointer value.
-     * Every region-bound component below is constructed against this snapshot and nothing else.
-     */
-    val region: RegionSnapshot = RegionBootstrap(regionStore).resolve()
+    /** One immutable set shared by map, routing and search for the life of this process. */
+    val regions: RegionSelection = RegionBootstrap(regionStore).resolve()
 
-    val regionCatalog = RegionCatalog(context.applicationContext, regionStore, region, appScope)
+    val regionCatalog = RegionCatalog(context.applicationContext, regionStore, regions, appScope)
     val regionImportManager = RegionImportManager(context.applicationContext, regionStore, appScope)
 
-    val tileAssetManager = TileAssetManager(context.applicationContext, region)
+    val tileAssetManager = TileAssetManager(context.applicationContext, regions)
     val locationController = LocationController()
     val locationProvider = LocationProvider(context.applicationContext, appScope)
-    val routingEngine = GraphHopperEngine(context.applicationContext, region)
-    val placeSearchRepository = PlaceSearchRepository(context.applicationContext, region)
+    val routingEngine = GraphHopperEngine(context.applicationContext, regions)
+    val placeSearchRepository = PlaceSearchRepository(context.applicationContext, regions)
     val navigationEngine = NavigationEngine(locationProvider, routingEngine, appScope)
 
     private val database = OffNavDatabase.build(context)

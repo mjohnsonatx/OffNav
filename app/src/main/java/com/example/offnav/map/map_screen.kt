@@ -58,7 +58,7 @@ import com.example.offnav.region.RegionCatalog
 import com.example.offnav.region.RegionImportManager
 import com.example.offnav.region.RegionOutline
 import com.example.offnav.region.RegionOverview
-import com.example.offnav.region.RegionSnapshot
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.routing.TurnInstruction
 import com.example.offnav.search.NearbySearchSheet
 import com.example.offnav.search.PlaceSearchResult
@@ -102,7 +102,7 @@ fun MapScreen(
     locationController: LocationController,
     locationProvider: LocationProvider,
     regionImportManager: RegionImportManager,
-    activeRegion: RegionSnapshot,
+    activeRegions: RegionSelection,
     regionCatalog: RegionCatalog
 ) {
 
@@ -155,7 +155,7 @@ fun MapScreen(
 
         Column(Modifier.align(Alignment.TopCenter).fillMaxWidth()) {
             TopBar(
-                regionLabel = activeRegion.displayName,
+                regionLabel = activeRegions.displayName,
                 onSearchClick = { showDestinationSearch = true },
                 onRegionsClick = { showRegions = true },
             )
@@ -459,7 +459,7 @@ fun DestinationSearchSheet(
         if (query.isBlank() && historyItems.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(48.dp), Alignment.Center) {
                 Text(
-                    "No recent routes yet. Search above to find an Austin destination.",
+                    "No recent routes yet. Search above to find a destination.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -485,7 +485,7 @@ fun DestinationSearchSheet(
                 if (query.isNotBlank()) {
                     when {
                         query.trim().length < 2 -> item(key = "query-hint") {
-                            SearchMessage("Type at least 2 characters to search Austin places")
+                            SearchMessage("Type at least 2 characters to search loaded places")
                         }
                         placeSearching -> item(key = "place-loading") {
                             Row(
@@ -494,14 +494,14 @@ fun DestinationSearchSheet(
                             ) {
                                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                                 Spacer(Modifier.width(12.dp))
-                                Text("Searching offline Austin data…")
+                                Text("Searching loaded offline regions…")
                             }
                         }
                         placeError != null -> item(key = "place-error") {
-                            SearchMessage(placeError ?: "Offline Austin search is unavailable", isError = true)
+                            SearchMessage(placeError ?: "Offline place search is unavailable", isError = true)
                         }
                         visiblePlaceItems.isNotEmpty() -> {
-                            item(key = "places-header") { SearchSectionHeader("Austin places") }
+                            item(key = "places-header") { SearchSectionHeader("Offline places") }
                             items(
                                 visiblePlaceItems,
                                 key = { result ->
@@ -513,7 +513,7 @@ fun DestinationSearchSheet(
                             }
                         }
                         historyItems.isEmpty() -> item(key = "no-results") {
-                            SearchMessage("No matching recent destinations or Austin places")
+                            SearchMessage("No matching recent destinations or offline places")
                         }
                     }
                 }

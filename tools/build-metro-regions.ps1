@@ -23,9 +23,9 @@ New-Item -ItemType Directory -Path $workRootPath -Force | Out-Null
 
 $definitions = @{
     'austin' = [pscustomobject]@{
-        Id = 'austin'; DisplayName = 'Austin'
-        MinLat = 30.0980; MaxLat = 30.5160; MinLon = -97.9380; MaxLon = -97.5610
-        FromLat = 30.2672; FromLon = -97.7431; ToLat = 30.2850; ToLon = -97.7350
+        Id = 'austin'; DisplayName = 'Austin-San Antonio'
+        MinLat = 28.9500; MaxLat = 30.5200; MinLon = -99.1500; MaxLon = -97.5300
+        FromLat = 30.2672; FromLon = -97.7431; ToLat = 29.4241; ToLon = -98.4936
     }
     'dallas-fort-worth' = [pscustomobject]@{
         Id = 'dallas-fort-worth'; DisplayName = 'Dallas-Fort Worth'
@@ -104,7 +104,7 @@ foreach ($regionId in $Regions) {
 
     & (Join-Path $PSScriptRoot 'build-routing-graph.ps1') `
         -InputPbf $regionalPbf -WorkRoot $routingWork -OutputAsset $routing `
-        -VerifyLabel $region.DisplayName `
+        -VerifyLabel $region.Id `
         -VerifyFromLatitude $region.FromLat -VerifyFromLongitude $region.FromLon `
         -VerifyToLatitude $region.ToLat -VerifyToLongitude $region.ToLon
 

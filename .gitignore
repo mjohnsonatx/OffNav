@@ -15,6 +15,10 @@ __pycache__/
 .cxx
 local.properties
 
+# Personal Android release signing (keep local and back up separately)
+/offnav-release.jks
+/keystore.properties
+
 # Local map tooling, source extracts, and generated tile databases
 /tools/tilemaker/tilemaker.exe
 *.osm.pbf

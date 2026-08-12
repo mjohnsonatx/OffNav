@@ -51,6 +51,11 @@ public final class GraphBuilder {
         Path input = requiredPath(options, "--input");
         Path work = requiredPath(options, "--work");
         Path output = requiredPath(options, "--output");
+        String verifyLabel = requiredValue(options, "--verify-label");
+        double verifyFromLat = requiredDouble(options, "--verify-from-lat");
+        double verifyFromLon = requiredDouble(options, "--verify-from-lon");
+        double verifyToLat = requiredDouble(options, "--verify-to-lat");
+        double verifyToLon = requiredDouble(options, "--verify-to-lon");
 
         if (!Files.isRegularFile(input)) {
             throw new IllegalArgumentException("OSM PBF does not exist: " + input);
@@ -97,7 +102,13 @@ public final class GraphBuilder {
         }
 
         Files.writeString(graph.resolve(VERSION_ENTRY), version + System.lineSeparator());
-        verifyGraph(graph, profile);
+        verifyGraph(
+                graph,
+                profile,
+                verifyLabel,
+                new GHPoint(verifyFromLat, verifyFromLon),
+                new GHPoint(verifyToLat, verifyToLon)
+        );
         createArchive(graph, archive);
 
         Files.createDirectories(output.getParent());
@@ -153,8 +164,14 @@ public final class GraphBuilder {
         return GRAPH_CONFIG_VERSION + ":" + profile.getVersion() + ":" + ENCODED_VALUES;
     }
 
-    private static void verifyGraph(Path graph, Profile profile) {
-        System.out.println("Verifying memory-mapped graph and an Austin route");
+    private static void verifyGraph(
+            Path graph,
+            Profile profile,
+            String label,
+            GHPoint from,
+            GHPoint to
+    ) {
+        System.out.println("Verifying memory-mapped graph and the " + label + " route");
         FixedCarGraphHopper hopper = new FixedCarGraphHopper(new AtomicReference<>("Verifying"));
         try {
             hopper.init(graphConfig(graph, null, profile));
@@ -162,16 +179,13 @@ public final class GraphBuilder {
             if (!hopper.load()) {
                 throw new IllegalStateException("The generated graph could not be loaded");
             }
-            GHRequest request = new GHRequest(List.of(
-                    new GHPoint(30.2672, -97.7431),
-                    new GHPoint(30.2850, -97.7350)
-            )).setProfile(PROFILE);
+            GHRequest request = new GHRequest(List.of(from, to)).setProfile(PROFILE);
             GHResponse response = hopper.route(request);
             if (response.hasErrors()) {
-                throw new IllegalStateException("Austin route failed: " + response.getErrors());
+                throw new IllegalStateException(label + " route failed: " + response.getErrors());
             }
             if (response.getBest().getDistance() <= 0) {
-                throw new IllegalStateException("Austin route had no distance");
+                throw new IllegalStateException(label + " route had no distance");
             }
             System.out.printf(
                     Locale.ROOT,
@@ -238,20 +252,33 @@ public final class GraphBuilder {
     }
 
     private static Map<String, String> parseArgs(String[] args) {
-        if (args.length != 6) {
+        if (args.length == 0 || args.length % 2 != 0) {
             throw new IllegalArgumentException(
-                    "Usage: --input <texas.osm.pbf> --work <new-directory> --output <region.ghz>"
+                    "Usage: --input <region.osm.pbf> --work <new-directory> " +
+                            "--output <region.ghz> --verify-label <name> " +
+                            "--verify-from-lat <latitude> --verify-from-lon <longitude> " +
+                            "--verify-to-lat <latitude> --verify-to-lon <longitude>"
             );
         }
-        return Map.of(args[0], args[1], args[2], args[3], args[4], args[5]);
+        java.util.LinkedHashMap<String, String> options = new java.util.LinkedHashMap<>();
+        for (int index = 0; index < args.length; index += 2) {
+            options.put(args[index], args[index + 1]);
+        }
+        return options;
     }
 
     private static Path requiredPath(Map<String, String> options, String name) {
+        return Path.of(requiredValue(options, name)).toAbsolutePath().normalize();
+    }
+
+    private static String requiredValue(Map<String, String> options, String name) {
         String value = options.get(name);
-        if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("Missing " + name);
-        }
-        return Path.of(value).toAbsolutePath().normalize();
+        if (value == null || value.isBlank()) throw new IllegalArgumentException("Missing " + name);
+        return value;
+    }
+
+    private static double requiredDouble(Map<String, String> options, String name) {
+        return Double.parseDouble(requiredValue(options, name));
     }
 
     private static final class FixedCarGraphHopper extends GraphHopper {

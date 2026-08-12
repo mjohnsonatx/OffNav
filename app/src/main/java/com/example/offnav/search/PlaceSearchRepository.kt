@@ -2,6 +2,7 @@ package com.example.offnav.search
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.region.RegionSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,7 +37,7 @@ private data class RankedPlaceSearchResult(
 
 class PlaceSearchRepository(
     context: Context,
-    private val region: RegionSnapshot,
+    private val regions: RegionSelection,
 ) {
     companion object {
         private const val SEARCH_ASSET = "search/austin_places.db"
@@ -53,28 +54,26 @@ class PlaceSearchRepository(
 
     private val appContext = context.applicationContext
 
-    @Volatile
-    private var database: SQLiteDatabase? = null
-
-    /** `searchNearby` used the old `db` field; route it through the same cached handle. */
-    private val db: SQLiteDatabase get() = openDatabase()
+    private val databases = linkedMapOf<String, SQLiteDatabase>()
 
     @Synchronized
-    private fun openDatabase(): SQLiteDatabase {
-        database?.takeIf { it.isOpen }?.let { return it }
-        val file = when (region) {
-            is RegionSnapshot.Installed -> region.searchDb.also {
-                check(it.isFile) { "Active region is missing search.db" }
-            }
-            RegionSnapshot.BuiltIn -> ensureDatabaseOnDisk()
-        }
-        return SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
-            .also { opened ->
-                check(opened.version == region.searchSchema) {
-                    "Unsupported search index version: ${opened.version} (expected ${region.searchSchema})"
+    private fun openDatabases(): List<SQLiteDatabase> = regions.snapshots.map { region ->
+        databases[region.pointerValue]?.takeIf { it.isOpen } ?: run {
+            val file = when (region) {
+                is RegionSnapshot.Installed -> region.searchDb.also {
+                    check(it.isFile) { "${region.displayName} is missing search.db" }
                 }
-                database = opened
+                RegionSnapshot.BuiltIn -> ensureDatabaseOnDisk()
             }
+            SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+                .also { opened ->
+                    check(opened.version == region.searchSchema) {
+                        "Unsupported ${region.displayName} search index version: " +
+                            "${opened.version} (expected ${region.searchSchema})"
+                    }
+                    databases[region.pointerValue] = opened
+                }
+        }
     }
 
     fun search(query: String, limit: Int = DEFAULT_LIMIT): List<PlaceSearchResult> {
@@ -85,11 +84,10 @@ class PlaceSearchRepository(
         val nameMatchQuery = tokens.joinToString(" ") { token -> "name:$token*" }
         val resultLimit = limit.coerceIn(1, 50)
         val candidateLimit = (resultLimit * 25).coerceAtMost(500)
-        val db = openDatabase()
-        val candidates = (
+        val candidates = openDatabases().flatMap { db ->
             queryCandidates(db, nameMatchQuery, candidateLimit) +
                 queryCandidates(db, matchQuery, candidateLimit)
-            ).distinctBy { candidate ->
+        }.distinctBy { candidate ->
                 with(candidate.place) { "$name\u0000$latitude\u0000$longitude" }
             }
         return candidates
@@ -120,21 +118,21 @@ class PlaceSearchRepository(
         val maxLat = center.latitude + dLat
         val minLon = center.longitude - dLon
         val maxLon = center.longitude + dLon
-        val clauses = mutableListOf("lat BETWEEN ? AND ?", "lon BETWEEN ? AND ?")
+        val clauses = mutableListOf("latitude BETWEEN ? AND ?", "longitude BETWEEN ? AND ?")
         val args = mutableListOf(
             minLat.toString(), maxLat.toString(),
             minLon.toString(), maxLon.toString(),
         )
         // Category filter
         if (categories.isNotEmpty()) {
-            val allClasses = categories.flatMap { it.osmClasses }.toSet()
-            val placeholders = allClasses.joinToString(",") { "?" }
-            clauses += "class IN ($placeholders)"
-            args += allClasses
+            val labels = categories.flatMap(::searchCategories).toSet()
+            val placeholders = labels.joinToString(",") { "?" }
+            clauses += "category IN ($placeholders)"
+            args += labels
         }
         // Text filter
         if (query.isNotBlank()) {
-            clauses += "(name LIKE ? COLLATE NOCASE OR street LIKE ? COLLATE NOCASE)"
+            clauses += "(name LIKE ? COLLATE NOCASE OR subtitle LIKE ? COLLATE NOCASE)"
             val wild = "%${query.trim()}%"
             args += wild
             args += wild
@@ -142,15 +140,30 @@ class PlaceSearchRepository(
         val where = clauses.joinToString(" AND ")
         // Fetch more than limit, then sort/trim client-side (SQLite can't do haversine ORDER BY)
         val fetchLimit = limit * 3
-        val sql = """
-            SELECT name, class, subclass, housenumber, street, lat, lon
-            FROM places
-            WHERE $where
-            LIMIT $fetchLimit
-        """.trimIndent()
-        val raw = db.rawQuery(sql, args.toTypedArray()).use { c ->
-            buildList { while (c.moveToNext()) add(c.toResult()) }
-        }
+        val raw = openDatabases().flatMap { db ->
+            val sql = """
+                SELECT name, subtitle, category, latitude, longitude
+                FROM places
+                WHERE $where
+                LIMIT $fetchLimit
+            """.trimIndent()
+            db.rawQuery(sql, args.toTypedArray()).use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add(
+                            PlaceSearchResult(
+                                name = cursor.getString(0),
+                                subtitle = cursor.getString(1),
+                                category = cursor.getString(2),
+                                osmClass = cursor.getString(2).lowercase(),
+                                latitude = cursor.getDouble(3),
+                                longitude = cursor.getDouble(4),
+                            )
+                        )
+                    }
+                }
+            }
+        }.distinctBy { result -> "${result.name}\u0000${result.latitude}\u0000${result.longitude}" }
         // Compute distances and sort
         raw.map { it.copy(distanceMeters = haversineMeters(center, it.latitude, it.longitude)) }
             .sortedBy { it.distanceMeters }
@@ -181,16 +194,24 @@ class PlaceSearchRepository(
                                 name = cursor.getString(0),
                                 subtitle = cursor.getString(1),
                                 category = cursor.getString(2),
-                                osmClass = cursor.getString(3),
-                                latitude = cursor.getDouble(4),
-                                longitude = cursor.getDouble(5),
+                                osmClass = cursor.getString(2).lowercase(),
+                                latitude = cursor.getDouble(3),
+                                longitude = cursor.getDouble(4),
                             ),
-                            sourceRank = cursor.getInt(6),
+                            sourceRank = cursor.getInt(5),
                         )
                     )
                 }
             }
         }
+    }
+
+    private fun searchCategories(category: PlaceCategory): Set<String> = when (category) {
+        PlaceCategory.RESTAURANTS -> setOf("Food and drink", "Ice cream")
+        PlaceCategory.FUEL -> setOf("Fuel", "EV charging")
+        PlaceCategory.HOSPITALS -> setOf("Healthcare", "Veterinary")
+        PlaceCategory.PARKS -> setOf("Park")
+        PlaceCategory.BUSINESSES -> setOf("Local business", "Bank", "Post office", "Car wash")
     }
 
     private fun ensureDatabaseOnDisk(): File {

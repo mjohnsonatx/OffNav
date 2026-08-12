@@ -19,7 +19,7 @@ sealed interface ImportState {
         val fraction: Float get() = if (totalBytes > 0) (copiedBytes.toFloat() / totalBytes).coerceIn(0f, 1f) else 0f
     }
     data object Validating : ImportState
-    /** Published only after the pointer flip. The new region is never shown until now. */
+    /** Published only after the cold-start selection update. */
     data class RestartRequired(val displayName: String, val version: String) : ImportState
     data class Failed(val message: String) : ImportState
 }

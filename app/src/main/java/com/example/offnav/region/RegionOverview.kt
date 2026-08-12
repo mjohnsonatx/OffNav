@@ -12,7 +12,10 @@ object RegionOverview {
     const val LINE_LAYER_ID = "installed-region-line"
 
     fun toGeoJson(regions: List<RegionInfo>): String {
-        val features = regions.mapNotNull { region ->
+        val features = regions
+            .filter { it.isActive }
+            .distinctBy { it.regionId }
+            .mapNotNull { region ->
             val bounds = region.bounds ?: return@mapNotNull null
             Feature.fromGeometry(bounds.toPolygon()).apply {
                 addStringProperty("installId", region.installId)

@@ -32,7 +32,7 @@ class MainActivity : ComponentActivity() {
                             container.locationProvider,
                             container.historyRepository,
                             container.placeSearchRepository,
-                            container.region
+                            container.regions
                         ) as T
                 }
             )
@@ -55,7 +55,7 @@ class MainActivity : ComponentActivity() {
                 locationController = container.locationController,
                 locationProvider = container.locationProvider,
                 regionImportManager = container.regionImportManager,
-                activeRegion = container.region,
+                activeRegions = container.regions,
                 regionCatalog = container.regionCatalog
             )
         }

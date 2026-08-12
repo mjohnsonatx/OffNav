@@ -4,6 +4,12 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+def releaseKeystorePropertiesFile = rootProject.file('keystore.properties')
+def releaseKeystoreProperties = new Properties()
+if (releaseKeystorePropertiesFile.isFile()) {
+    releaseKeystorePropertiesFile.withInputStream { releaseKeystoreProperties.load(it) }
+}
+
 android {
     namespace 'com.example.offnav'
     compileSdk {
@@ -22,8 +28,22 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (releaseKeystorePropertiesFile.isFile()) {
+            release {
+                storeFile rootProject.file(releaseKeystoreProperties['storeFile'])
+                storePassword releaseKeystoreProperties['storePassword']
+                keyAlias releaseKeystoreProperties['keyAlias']
+                keyPassword releaseKeystoreProperties['keyPassword']
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseKeystorePropertiesFile.isFile()) {
+                signingConfig signingConfigs.release
+            }
             optimization {
                 enable false
             }

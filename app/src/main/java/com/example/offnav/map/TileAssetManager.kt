@@ -1,12 +1,15 @@
 package com.example.offnav.map
 
 import android.content.Context
+import com.example.offnav.region.RegionSelection
 import com.example.offnav.region.RegionSnapshot
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 class TileAssetManager(
     val context: Context,
-    private val region: RegionSnapshot,
+    private val regions: RegionSelection,
 ) {
     companion object {
         private const val TILE_ASSET = "tiles/region.mbtiles"
@@ -14,10 +17,10 @@ class TileAssetManager(
         private const val STYLE_ASSET = "style.json"
     }
 
-    /** Resolves the mbtiles for the *active* snapshot only. Imported regions are already on disk. */
-    fun ensureTilesOnDisk(): File = when (region) {
+    /** Resolves every selected MBTiles file. Imported regions are already on disk. */
+    fun ensureTilesOnDisk(): List<File> = regions.snapshots.map { region -> when (region) {
         is RegionSnapshot.Installed -> region.tilesFile.also {
-            check(it.isFile) { "Active region is missing tiles.mbtiles" }
+            check(it.isFile) { "${region.displayName} is missing tiles.mbtiles" }
         }
         RegionSnapshot.BuiltIn -> File(context.filesDir, TILE_FILE).also { dest ->
             if (!dest.exists()) {
@@ -30,11 +33,42 @@ class TileAssetManager(
                 } catch (t: Throwable) { partial.delete(); throw t }
             }
         }
-    }
+    } }
 
     fun buildStyleJson(): String {
-        val tilePath = ensureTilesOnDisk().absolutePath
         val raw = context.assets.open(STYLE_ASSET).bufferedReader().use { it.readText() }
-        return raw.replace("{MBTILES_PATH}", "mbtiles:///$tilePath")
+        val style = JSONObject(raw)
+        val sources = style.getJSONObject("sources")
+        val sourceTemplate = JSONObject(sources.getJSONObject("offline").toString())
+        sources.remove("offline")
+
+        val sourceIds = ensureTilesOnDisk().mapIndexed { index, tileFile ->
+            val sourceId = "offline-region-$index"
+            sources.put(
+                sourceId,
+                JSONObject(sourceTemplate.toString())
+                    .put("url", "mbtiles:///${tileFile.absolutePath}"),
+            )
+            sourceId
+        }
+
+        val originalLayers = style.getJSONArray("layers")
+        val composedLayers = JSONArray()
+        for (layerIndex in 0 until originalLayers.length()) {
+            val template = originalLayers.getJSONObject(layerIndex)
+            if (template.optString("source") != "offline") {
+                composedLayers.put(JSONObject(template.toString()))
+                continue
+            }
+            sourceIds.forEachIndexed { regionIndex, sourceId ->
+                composedLayers.put(
+                    JSONObject(template.toString())
+                        .put("id", "${template.getString("id")}--region-$regionIndex")
+                        .put("source", sourceId),
+                )
+            }
+        }
+        style.put("layers", composedLayers)
+        return style.toString()
     }
 }

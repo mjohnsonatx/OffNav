@@ -24,7 +24,7 @@ application {
 
 tasks.register('extractSearchData', JavaExec) {
     group = 'application'
-    description = 'Extracts Austin addresses and POIs from an OSM PBF into TSV.'
+    description = 'Extracts bounded regional addresses and POIs from an OSM PBF into TSV.'
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.example.offnav.tools.AustinSearchExtractor'
     jvmArgs '-Xms512m', '-Xmx8g', '-Dfile.encoding=UTF-8'

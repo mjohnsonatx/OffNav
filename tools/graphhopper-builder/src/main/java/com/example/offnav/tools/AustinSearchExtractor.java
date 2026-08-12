@@ -20,16 +20,16 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Streams a regional OSM PBF and emits search candidates inside an Austin bounding box.
+ * Streams a regional OSM PBF and emits search candidates inside its configured bounds.
  *
  * The extractor keeps only in-bounds node coordinates. This is enough to calculate useful
  * centers for address/POI ways and relations without retaining the full Texas node set.
  */
 public final class AustinSearchExtractor {
-    private static final double DEFAULT_MIN_LAT = 30.0980;
-    private static final double DEFAULT_MAX_LAT = 30.5160;
-    private static final double DEFAULT_MIN_LON = -97.9380;
-    private static final double DEFAULT_MAX_LON = -97.5610;
+    private static final double DEFAULT_MIN_LAT = 28.9500;
+    private static final double DEFAULT_MAX_LAT = 30.5200;
+    private static final double DEFAULT_MIN_LON = -99.1500;
+    private static final double DEFAULT_MAX_LON = -97.5300;
     private static final long PROGRESS_INTERVAL = 2_000_000L;
 
     private AustinSearchExtractor() {
@@ -58,7 +58,7 @@ public final class AustinSearchExtractor {
 
         System.out.printf(
                 Locale.ROOT,
-                "Extracting Austin search data from %s (%.1f MB)%nBounds: %.4f,%.4f to %.4f,%.4f%n",
+                "Extracting regional search data from %s (%.1f MB)%nBounds: %.4f,%.4f to %.4f,%.4f%n",
                 input,
                 Files.size(input) / 1_000_000.0,
                 bounds.minLat,
@@ -194,7 +194,6 @@ public final class AustinSearchExtractor {
             BufferedWriter writer,
             Counters counters
     ) throws Exception {
-        if (isExplicitlyOutsideAustin(element)) return;
         Classification classification = classify(element);
         String address = formattedAddress(element);
         String displayName;
@@ -246,15 +245,6 @@ public final class AustinSearchExtractor {
                 Integer.toString(classification.rank)
         );
         counters.candidates++;
-    }
-
-    private static boolean isExplicitlyOutsideAustin(ReaderElement element) {
-        String city = firstNonBlank(
-                element.getTag("addr:city"),
-                element.getTag("contact:city"),
-                element.getTag("is_in:city")
-        ).toLowerCase(Locale.ROOT);
-        return !city.isBlank() && !city.startsWith("austin");
     }
 
     private static Classification classify(ReaderElement element) {
@@ -329,10 +319,15 @@ public final class AustinSearchExtractor {
     }
 
     private static String locality(ReaderElement element) {
-        String city = firstNonBlank(element.getTag("addr:city"), "Austin");
+        String city = firstNonBlank(
+                element.getTag("addr:city"),
+                element.getTag("contact:city"),
+                element.getTag("is_in:city")
+        );
         String state = firstNonBlank(element.getTag("addr:state"), "TX");
         String postcode = value(element, "addr:postcode");
-        return city + ", " + state + (postcode.isBlank() ? "" : " " + postcode);
+        String locality = city.isBlank() ? state : city + ", " + state;
+        return locality + (postcode.isBlank() ? "" : " " + postcode);
     }
 
     private static String value(ReaderElement element, String key) {

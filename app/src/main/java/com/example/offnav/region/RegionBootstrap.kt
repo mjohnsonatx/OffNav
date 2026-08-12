@@ -2,18 +2,22 @@ package com.example.offnav.region
 
 class RegionBootstrap(private val store: RegionStore) {
 
-    fun resolve(): RegionSnapshot {
+    fun resolve(): RegionSelection {
         store.ensureDirs()
-        val pointer = store.readPointer()
-        val snapshot: RegionSnapshot =
+        val requested = store.readSelection()
+        val resolved = requested.mapNotNull { pointer ->
             if (pointer == RegionSnapshot.BuiltIn.pointerValue) RegionSnapshot.BuiltIn
-            else store.readSnapshot(pointer) ?: RegionSnapshot.BuiltIn
-
-        if (snapshot is RegionSnapshot.BuiltIn && pointer != snapshot.pointerValue) {
-            runCatching { store.publishPointer(snapshot.pointerValue) }   // pointer pointed at nothing
+            else store.readSnapshot(pointer)
         }
+            .distinctBy { it.regionId }
+            .ifEmpty { listOf(RegionSnapshot.BuiltIn) }
+        val selection = RegionSelection(resolved)
 
-        runCatching { store.pruneOrphans() }   // staging + torn dirs only; installed regions are retained
-        return snapshot
+        if (requested != selection.snapshots.map { it.pointerValue }) {
+            runCatching { store.publishSelection(selection.snapshots.map { it.pointerValue }) }
+        }
+        runCatching { store.pruneOrphans() }
+        runCatching { store.pruneSuperseded(selection) }
+        return selection
     }
 }

@@ -1,9 +1,8 @@
 package com.example.offnav.region
 
-import android.app.AlarmManager
-import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Process
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -23,20 +22,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.offnav.MainActivity
+import com.example.offnav.RestartActivity
 
 object AppRestart {
-    /** The region can't be swapped while MapLibre / SQLite / GraphHopper hold it: restart the process. */
+    /** Relaunch through a tiny helper process so killing MapLibre/SQLite/GraphHopper is reliable. */
     fun restart(context: Context) {
-        val intent = Intent(context, MainActivity::class.java)
+        val intent = Intent(context, RestartActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        val pending = PendingIntent.getActivity(
-            context, 0x0FF4A7, intent,
-            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        (context.getSystemService(Context.ALARM_SERVICE) as AlarmManager)
-            .set(AlarmManager.RTC, System.currentTimeMillis() + 150L, pending)
-        Runtime.getRuntime().exit(0)
+        context.startActivity(intent)
+        Process.killProcess(Process.myPid())
     }
 }
 
@@ -66,6 +60,11 @@ fun RegionsSheet(
     ModalBottomSheet(onDismissRequest = { if (!manager.isBusy) onDismiss() }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).navigationBarsPadding()) {
             Text("Offline regions", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Load any combination. Changes apply together after restart.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(16.dp))
 
             when (val s = importState) {
@@ -96,7 +95,7 @@ fun RegionsSheet(
                 }
             }
 
-            pending?.let { p ->
+            if (pending) {
                 Spacer(Modifier.height(12.dp))
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -104,7 +103,7 @@ fun RegionsSheet(
                 ) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("${p.displayName} loads on next launch", style = MaterialTheme.typography.bodyMedium)
+                            Text("Region changes load on next launch", style = MaterialTheme.typography.bodyMedium)
                             Text(
                                 "Maps, routing and search can't be swapped while they're open.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -129,9 +128,9 @@ fun RegionsSheet(
                 items(regions, key = { it.installId }) { region ->
                     RegionRow(
                         region = region,
-                        onActivate = {
+                        onLoadToggle = {
                             error = null
-                            catalog.activate(region.installId) { r ->
+                            catalog.setSelected(region.installId, !region.isSelectedForNextLaunch) { r ->
                                 error = r.exceptionOrNull()?.message
                             }
                         },
@@ -172,7 +171,7 @@ fun RegionsSheet(
 }
 
 @Composable
-private fun RegionRow(region: RegionInfo, onActivate: () -> Unit, onDelete: () -> Unit) {
+private fun RegionRow(region: RegionInfo, onLoadToggle: () -> Unit, onDelete: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -182,8 +181,12 @@ private fun RegionRow(region: RegionInfo, onActivate: () -> Unit, onDelete: () -
                 Text(region.displayName, style = MaterialTheme.typography.bodyLarge)
                 Spacer(Modifier.width(8.dp))
                 when {
-                    region.isActive -> AssistChip({}, { Text("Active") }, enabled = false)
-                    region.isPendingActivation -> AssistChip({}, { Text("Next launch") }, enabled = false)
+                    region.isActive && region.isSelectedForNextLaunch ->
+                        AssistChip({}, { Text("Loaded") }, enabled = false)
+                    !region.isActive && region.isSelectedForNextLaunch ->
+                        AssistChip({}, { Text("Loads next") }, enabled = false)
+                    region.isPendingRemoval ->
+                        AssistChip({}, { Text("Unloads next") }, enabled = false)
                 }
             }
             Text(
@@ -203,7 +206,9 @@ private fun RegionRow(region: RegionInfo, onActivate: () -> Unit, onDelete: () -
                 )
             }
         }
-        if (region.canActivate) TextButton(onClick = onActivate) { Text("Use") }
+        TextButton(onClick = onLoadToggle) {
+            Text(if (region.isSelectedForNextLaunch) "Unload" else "Load")
+        }
         if (region.canDelete) {
             IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete ${region.displayName}") }
         }
