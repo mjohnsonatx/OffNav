@@ -32,3 +32,4 @@ app/src/main/assets/search/*.db
 # Preloaded container images are distributed separately, never through Git.
 /offline/artifacts/*.tar
 /offline/artifacts/*.offnav
+/offline/artifacts/SHA256SUMS
