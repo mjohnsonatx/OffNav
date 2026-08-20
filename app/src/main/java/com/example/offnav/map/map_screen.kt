@@ -197,7 +197,7 @@ fun MapScreen(
 }
 
 @Composable
-private fun TopBar(regionLabel: String, onSearchClick: () -> Unit, onRegionsClick: () -> Unit) {
+internal fun TopBar(regionLabel: String, onSearchClick: () -> Unit, onRegionsClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .statusBarsPadding()
@@ -259,112 +259,21 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
     val pdfExporting by viewModel.pdfExporting.collectAsStateWithLifecycle()
 
 
-    Surface(
-        shape = MaterialTheme.shapes.large,
-        tonalElevation = 4.dp,
-        shadowElevation = 6.dp,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            // Destination header
-            Text(
-                s.destinationLabel,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1, overflow = TextOverflow.Ellipsis
-            )
-            if (s.destinationSubtitle.isNotBlank()) {
-                Text(
-                    s.destinationSubtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // Stop list (if there are waypoints)
-            if (stops.size > 1) {   // destination + at least one waypoint
-                StopListCard(
-                    stops = stops,
-                    onRemove = viewModel::removeStop,
-                    onMoveUp = { i -> viewModel.moveStop(i, i - 1) },
-                    onMoveDown = { i -> viewModel.moveStop(i, i + 1) },
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-
-            // Route summary
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    s.durationText,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "${s.distanceText} · arrive ${s.arrivalText}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // Action buttons
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { viewModel.startNavigation(context) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.Navigation, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Start")
-                }
-                FilledTonalButton(onClick = { showAddStop = true }) {
-                    Icon(Icons.Default.AddLocation, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Stop")
-                }
-                FilledTonalButton(onClick = { showSteps = true }) {
-                    Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("${s.stepCount}")
-                }
-                FilledTonalIconButton(onClick = viewModel::clearRoute) {
-                    Icon(Icons.Default.Close, contentDescription = "Clear route")
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-            // Second row: share & export
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.shareRoute(context) }) {
-                    Icon(Icons.Default.Share, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Share")
-                }
-                OutlinedButton(
-                    onClick = { viewModel.exportDirectionsPdf(context) },
-                    enabled = !pdfExporting,
-                ) {
-                    if (pdfExporting) {
-                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                    } else {
-                        Icon(Icons.Default.PictureAsPdf, null, Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.width(4.dp))
-                    Text("PDF")
-                }
-                OutlinedButton(onClick = { viewModel.shareLocation(context) }) {
-                    Icon(Icons.Default.MyLocation, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("Share Pin")
-                }
-            }
-        }
-    }
+    RoutePreviewContent(
+        summary = s,
+        stops = stops,
+        pdfExporting = pdfExporting,
+        onStart = { viewModel.startNavigation(context) },
+        onAddStop = { showAddStop = true },
+        onShowSteps = { showSteps = true },
+        onClear = viewModel::clearRoute,
+        onShareRoute = { viewModel.shareRoute(context) },
+        onExportPdf = { viewModel.exportDirectionsPdf(context) },
+        onShareLocation = { viewModel.shareLocation(context) },
+        onRemoveStop = viewModel::removeStop,
+        onMoveStopUp = { i -> viewModel.moveStop(i, i - 1) },
+        onMoveStopDown = { i -> viewModel.moveStop(i, i + 1) },
+    )
 
     // Steps sheet
     if (showSteps) {
@@ -400,6 +309,122 @@ private fun RoutePreviewCard(viewModel: MapViewModel) {
     }
 }
 
+/** State-hoisted route preview used by the production card and UI tests. */
+@Composable
+internal fun RoutePreviewContent(
+    summary: RouteSummary,
+    stops: List<com.example.offnav.navigation.Stop>,
+    pdfExporting: Boolean,
+    onStart: () -> Unit,
+    onAddStop: () -> Unit,
+    onShowSteps: () -> Unit,
+    onClear: () -> Unit,
+    onShareRoute: () -> Unit,
+    onExportPdf: () -> Unit,
+    onShareLocation: () -> Unit,
+    onRemoveStop: (Long) -> Unit,
+    onMoveStopUp: (Int) -> Unit,
+    onMoveStopDown: (Int) -> Unit,
+) {
+    Surface(
+        shape = MaterialTheme.shapes.large,
+        tonalElevation = 4.dp,
+        shadowElevation = 6.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                summary.destinationLabel,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (summary.destinationSubtitle.isNotBlank()) {
+                Text(
+                    summary.destinationSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            if (stops.size > 1) {
+                StopListCard(
+                    stops = stops,
+                    onRemove = onRemoveStop,
+                    onMoveUp = onMoveStopUp,
+                    onMoveDown = onMoveStopDown,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    summary.durationText,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    "${summary.distanceText} · arrive ${summary.arrivalText}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onStart, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Navigation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Start")
+                }
+                FilledTonalButton(onClick = onAddStop) {
+                    Icon(Icons.Default.AddLocation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Stop")
+                }
+                FilledTonalButton(onClick = onShowSteps) {
+                    Icon(Icons.AutoMirrored.Filled.List, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("${summary.stepCount}")
+                }
+                FilledTonalIconButton(onClick = onClear) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear route")
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onShareRoute) {
+                    Icon(Icons.Default.Share, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share")
+                }
+                OutlinedButton(onClick = onExportPdf, enabled = !pdfExporting) {
+                    if (pdfExporting) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.PictureAsPdf, null, Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Text("PDF")
+                }
+                OutlinedButton(onClick = onShareLocation) {
+                    Icon(Icons.Default.MyLocation, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Share Pin")
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun DestinationSearchSheet(
     viewModel: MapViewModel,
@@ -411,6 +436,39 @@ fun DestinationSearchSheet(
     val placeItems by viewModel.placeResults.collectAsStateWithLifecycle()
     val placeSearching by viewModel.placeSearching.collectAsStateWithLifecycle()
     val placeError by viewModel.placeSearchError.collectAsStateWithLifecycle()
+
+    DestinationSearchContent(
+        query = query,
+        historyItems = historyItems,
+        placeItems = placeItems,
+        placeSearching = placeSearching,
+        placeError = placeError,
+        onQueryChange = viewModel::onDestinationQueryChange,
+        onClearQuery = viewModel::clearDestinationQuery,
+        onClearHistory = viewModel::clearHistory,
+        onHistoryPick = onHistoryPick,
+        onPlacePick = onPlacePick,
+        onPinToggle = { entry -> viewModel.togglePin(entry.id, !entry.pinned) },
+        onDeleteHistory = { entry -> viewModel.deleteHistory(entry.id) },
+    )
+}
+
+/** State-hoisted destination search surface used by the production sheet and UI tests. */
+@Composable
+internal fun DestinationSearchContent(
+    query: String,
+    historyItems: List<RouteHistoryEntry>,
+    placeItems: List<PlaceSearchResult>,
+    placeSearching: Boolean,
+    placeError: String?,
+    onQueryChange: (String) -> Unit,
+    onClearQuery: () -> Unit,
+    onClearHistory: () -> Unit,
+    onHistoryPick: (RouteHistoryEntry) -> Unit,
+    onPlacePick: (PlaceSearchResult) -> Unit,
+    onPinToggle: (RouteHistoryEntry) -> Unit,
+    onDeleteHistory: (RouteHistoryEntry) -> Unit,
+) {
     val historyDestinationKeys = remember(historyItems) {
         historyItems.mapTo(mutableSetOf()) { entry ->
             coordinateKey(entry.destination.latitude, entry.destination.longitude)
@@ -425,14 +483,14 @@ fun DestinationSearchSheet(
     Column(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
         OutlinedTextField(
             value = query,
-            onValueChange = viewModel::onDestinationQueryChange,
+            onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             label = { Text("Destination") },
             placeholder = { Text("Address, restaurant, park, or business") },
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = viewModel::clearDestinationQuery) {
+                    IconButton(onClick = onClearQuery) {
                         Icon(Icons.Default.Close, "Clear")
                     }
                 }
@@ -452,7 +510,7 @@ fun DestinationSearchSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (query.isBlank() && historyItems.isNotEmpty()) {
-                TextButton(onClick = viewModel::clearHistory) { Text("Clear") }
+                TextButton(onClick = onClearHistory) { Text("Clear") }
             }
         }
 
@@ -475,8 +533,8 @@ fun DestinationSearchSheet(
                         HistoryRow(
                             entry = entry,
                             onClick = { onHistoryPick(entry) },
-                            onPinToggle = { viewModel.togglePin(entry.id, !entry.pinned) },
-                            onDelete = { viewModel.deleteHistory(entry.id) },
+                            onPinToggle = { onPinToggle(entry) },
+                            onDelete = { onDeleteHistory(entry) },
                         )
                         HorizontalDivider(Modifier.padding(start = 56.dp))
                     }
@@ -1057,7 +1115,7 @@ private fun NavPanel(viewModel: MapViewModel, modifier: Modifier = Modifier) {
 // ════════════════════════════════════════════════════════════════
 
 @Composable
-private fun TurnBannerCard(banner: NavBanner, isRerouting: Boolean) {
+internal fun TurnBannerCard(banner: NavBanner, isRerouting: Boolean) {
     Surface(
         tonalElevation = 4.dp,
         shape = MaterialTheme.shapes.medium,
@@ -1194,7 +1252,7 @@ private fun DirectionsList(
 }
 
 @Composable
-private fun DirectionRow(
+internal fun DirectionRow(
     index: Int,
     instruction: TurnInstruction,
     isCurrent: Boolean,

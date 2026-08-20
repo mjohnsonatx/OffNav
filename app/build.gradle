@@ -76,6 +76,13 @@ android {
             excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
         }
     }
+
+    lint {
+        // Instrumentation tests are compiled and run separately on-device. Keeping
+        // production lint independent preserves the self-contained offline builder,
+        // whose cache intentionally contains only dependencies needed for app builds.
+        ignoreTestSources = true
+    }
 }
 
 dependencies {

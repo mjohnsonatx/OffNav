@@ -51,6 +51,29 @@ fun NearbySearchSheet(
     val results by viewModel.nearbyResults.collectAsStateWithLifecycle()
     val searching by viewModel.nearbySearching.collectAsStateWithLifecycle()
 
+    NearbySearchContent(
+        query = query,
+        selectedCategories = selectedCats,
+        results = results,
+        searching = searching,
+        onQueryChange = viewModel::onNearbyQueryChange,
+        onCategoryToggle = viewModel::toggleCategory,
+        onPick = onPick,
+    )
+}
+
+/** State-hoisted nearby search surface used by the production sheet and UI tests. */
+@Composable
+internal fun NearbySearchContent(
+    query: String,
+    selectedCategories: Set<PlaceCategory>,
+    results: List<PlaceSearchResult>,
+    searching: Boolean,
+    onQueryChange: (String) -> Unit,
+    onCategoryToggle: (PlaceCategory) -> Unit,
+    onPick: (PlaceSearchResult) -> Unit,
+) {
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -59,7 +82,7 @@ fun NearbySearchSheet(
         // ── Search field ──
         OutlinedTextField(
             value = query,
-            onValueChange = viewModel::onNearbyQueryChange,
+            onValueChange = onQueryChange,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
@@ -67,7 +90,7 @@ fun NearbySearchSheet(
             leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = {
                 if (query.isNotEmpty()) {
-                    IconButton(onClick = { viewModel.onNearbyQueryChange("") }) {
+                    IconButton(onClick = { onQueryChange("") }) {
                         Icon(Icons.Default.Close, "Clear")
                     }
                 }
@@ -87,10 +110,10 @@ fun NearbySearchSheet(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PlaceCategory.entries.forEach { cat ->
-                val selected = cat in selectedCats
+                val selected = cat in selectedCategories
                 FilterChip(
                     selected = selected,
-                    onClick = { viewModel.toggleCategory(cat) },
+                    onClick = { onCategoryToggle(cat) },
                     label = { Text(cat.label) },
                     leadingIcon = {
                         Icon(cat.icon, null, Modifier.size(18.dp))
@@ -117,7 +140,7 @@ fun NearbySearchSheet(
                 }
             }
 
-            results.isEmpty() && (query.isNotBlank() || selectedCats.isNotEmpty()) -> {
+            results.isEmpty() && (query.isNotBlank() || selectedCategories.isNotEmpty()) -> {
                 Text(
                     "No nearby places found. Try a different search or category.",
                     modifier = Modifier

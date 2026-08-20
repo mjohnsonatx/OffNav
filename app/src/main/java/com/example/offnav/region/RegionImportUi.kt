@@ -171,7 +171,7 @@ fun RegionsSheet(
 }
 
 @Composable
-private fun RegionRow(region: RegionInfo, onLoadToggle: () -> Unit, onDelete: () -> Unit) {
+internal fun RegionRow(region: RegionInfo, onLoadToggle: () -> Unit, onDelete: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
