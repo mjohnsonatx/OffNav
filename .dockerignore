@@ -1,0 +1,17 @@
+.git
+.agents
+.codex
+.idea
+.gradle
+**/build
+local.properties
+keystore.properties
+offnav-release.jks
+captures
+data
+tools
+offline/artifacts/*.tar
+offline/artifacts/*.tar.gz
+offline/artifacts/*.docker-archive
+*.iml
+*.osm.pbf

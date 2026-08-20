@@ -28,3 +28,7 @@ local.properties
 app/src/main/assets/search/*.db
 /data/tilemaker-work/
 /tools/graphhopper-builder/build/
+
+# Preloaded container images are distributed separately, never through Git.
+/offline/artifacts/*.tar
+/offline/artifacts/*.offnav

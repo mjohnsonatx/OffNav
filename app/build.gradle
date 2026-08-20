@@ -17,6 +17,7 @@ android {
             minorApiLevel = 1
         }
     }
+    buildToolsVersion "36.0.0"
 
     defaultConfig {
         applicationId "com.example.offnav"
@@ -40,6 +41,12 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Keep development installs separate from release builds. This also avoids
+            // signature conflicts when a different workstation created the debug key.
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+        }
         release {
             if (releaseKeystorePropertiesFile.isFile()) {
                 signingConfig signingConfigs.release
